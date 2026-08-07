@@ -1,0 +1,26 @@
+module QuickDock.Style
+
+DockStyleButton 1.0 DockStyleButton.qml
+DockStyleBorder 1.0 DockStyleBorder.qml
+DockStyleColors 1.0 DockStyleColors.qml
+DockStyleDelegates 1.0 DockStyleDelegates.qml
+DockStyleDrag 1.0 DockStyleDrag.qml
+DockStyleDragEdge 1.0 DockStyleDragEdge.qml
+DockStyleDragPreview 1.0 DockStyleDragPreview.qml
+DockStyleDrop 1.0 DockStyleDrop.qml
+DockStyleDropCompass 1.0 DockStyleDropCompass.qml
+DockStyleDropIndicator 1.0 DockStyleDropIndicator.qml
+DockStyleFloating 1.0 DockStyleFloating.qml
+DockStyleFloatingCascade 1.0 DockStyleFloatingCascade.qml
+DockStyleFloatingOrigin 1.0 DockStyleFloatingOrigin.qml
+DockStyleFloatingResizeGrip 1.0 DockStyleFloatingResizeGrip.qml
+DockStyleFonts 1.0 DockStyleFonts.qml
+DockStyleFrame 1.0 DockStyleFrame.qml
+DockStyleGlyphs 1.0 DockStyleGlyphs.qml
+DockStyleHeader 1.0 DockStyleHeader.qml
+DockStyleHeaderButton 1.0 DockStyleHeaderButton.qml
+DockStylePlaceholder 1.0 DockStylePlaceholder.qml
+DockStyleSplit 1.0 DockStyleSplit.qml
+DockStyleSplitter 1.0 DockStyleSplitter.qml
+DockStyleTab 1.0 DockStyleTab.qml
+DockStyleUnderline 1.0 DockStyleUnderline.qml

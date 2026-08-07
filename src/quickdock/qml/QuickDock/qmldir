@@ -1,0 +1,19 @@
+module QuickDock
+DockItem 1.0 DockItem.qml
+DockStyle 1.0 DockStyle.qml
+DockWorkspace 1.0 DockWorkspace.qml
+internal DockCommands DockCommands.qml
+internal DockContentHost DockContentHost.qml
+internal DockDragController DockDragController.qml
+internal DockDragPreview DockDragPreview.qml
+internal DockDropOverlay DockDropOverlay.qml
+internal DockFloatingController DockFloatingController.qml
+internal DockFloatingTitleBar DockFloatingTitleBar.qml
+internal DockFloatingTitleBarSlot DockFloatingTitleBarSlot.qml
+internal DockFloatingWindow DockFloatingWindow.qml
+internal DockGroup DockGroup.qml
+internal DockHeader DockHeader.qml
+internal DockHeaderSlot DockHeaderSlot.qml
+internal DockModel DockModel.qml
+internal DockNode DockNode.qml
+internal DockRegistry DockRegistry.qml
