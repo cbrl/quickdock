@@ -22,6 +22,16 @@ Window {
         return group ? group.active : ""
     }
     property alias dockingSurface: contentFrame
+
+    // Qt Quick 3D binds a scene to its window's renderer at the moment the item is reparented into
+    // that window. A window that has not yet rendered has no renderer to bind to, and the scene
+    // never recovers. A View3D moved here during construction draws nothing from then on, leaving
+    // only the plain Qt Quick overlays visible. Withholding the layout until this window has put
+    // up a frame keeps that binding valid. Rebuilding the scene afterwards does not repair it. The
+    // attachment has to be correct the first time.
+    property bool _renderReady: false
+    property bool _renderReadyPending: false
+
     property bool _ready: false
     property bool _applyingGeometry: false
     property bool _movingWindow: false
@@ -56,6 +66,16 @@ Window {
     Component.onCompleted: {
         applyFloatingState()
         _ready = true
+    }
+
+    // frameSwapped is delivered from the render thread, so hand the flag flip
+    // back to a clean pass of the GUI thread's event loop before the layout is
+    // built. Flipping it inline still races the renderer.
+    onFrameSwapped: {
+        if (!_renderReady && !_renderReadyPending) {
+            _renderReadyPending = true
+            Qt.callLater(function() { root._renderReady = true })
+        }
     }
 
     onXChanged: scheduleGeometryPublish()
@@ -330,9 +350,12 @@ Window {
             workspace: root.workspace
             containerId: root.containerId
             // Same self-referential cycle qmllint cannot close as in DockWorkspace.
-        floatingWindow: root // qmllint disable incompatible-type
+            floatingWindow: root // qmllint disable incompatible-type
             dedicatedFloatingTitleBar: root.hasDedicatedTitleBar
-            node: root.floatingState ? root.floatingState.root : null
+
+            // Empty until the window has rendered (see _renderReady above). The
+            // docks stay parked in the workspace for that one frame.
+            node: root._renderReady && root.floatingState ? root.floatingState.root : null
         }
 
         Loader {
