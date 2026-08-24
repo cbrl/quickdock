@@ -18,10 +18,11 @@ QtObject {
     signal layoutChanged()
     signal splitRatioChanged(string splitId, int splitterIndex)
     signal containerGeometryChanged(string containerId)
+    signal selectionChanged(var selections)
 
     property var _snapshot: DockTypes.layoutSnapshot({
         version: DockLayout.layoutVersion,
-        containers: [DockTypes.mainContainer({id: "main", root: null})],
+        containers: [DockTypes.mainContainer({id: "main", root: null, selected: ""})],
         hidden: []
     })
     property var _undoStack: []
@@ -47,18 +48,85 @@ QtObject {
         _redoStack = []
     }
 
-    function replaceSnapshot(value, recordUndo) {
+    function replaceSnapshot(value, recordUndo, preserveSelections) {
         if (!value || value === _snapshot)
             return false
         if (recordUndo === undefined || recordUndo)
             _pushUndo(_snapshot)
+        value = _withValidSelections(value, !!preserveSelections)
         _snapshot = _prepared(value)
         layoutChanged()
+        selectionChanged(selectionMap())
+        return true
+    }
+
+    function _withValidSelections(value, preserveSelections) {
+        const containers = []
+        const movedInto = ({})
+
+        for (let i = 0; i < value.containers.length; ++i) {
+            const nextContainer = value.containers[i]
+            const docks = DockLayout.collectDocks(nextContainer.root)
+            for (let j = 0; j < docks.length; ++j) {
+                const previous = DockLayout.containerForDock(_snapshot.containers, docks[j])
+                if (!previous || previous.id !== nextContainer.id)
+                    movedInto[nextContainer.id] = docks[j]
+            }
+        }
+
+        for (let i = 0; i < value.containers.length; ++i) {
+            const container = value.containers[i]
+            const docks = DockLayout.collectDocks(container.root)
+            const selected = (!preserveSelections ? movedInto[container.id] : "") || (
+                docks.indexOf(container.selected) >= 0 ? container.selected : DockLayout.firstActiveDock(container.root)
+            )
+            if (container.kind === "main") {
+                containers.push(DockTypes.mainContainer({
+                    id: container.id, root: container.root, selected: selected
+                }))
+            } else {
+                containers.push(DockTypes.floatingContainer({
+                    id: container.id, geometry: container.geometry,
+                    screen: container.screen || "", root: container.root,
+                    selected: selected
+                }))
+            }
+        }
+
+        return DockLayout.snapshotWith(containers, value.hidden)
+    }
+
+    function selectionMap() {
+        const result = ({})
+        for (let i = 0; i < _snapshot.containers.length; ++i)
+            result[_snapshot.containers[i].id] = _snapshot.containers[i].selected || ""
+
+        return result
+    }
+
+    function selectDock(dockId) {
+        const container = DockLayout.containerForDock(_snapshot.containers, dockId)
+        if (!container || container.selected === dockId)
+            return !!container
+
+        const containers = _snapshot.containers.slice()
+        const index = containers.indexOf(container)
+        const copy = DockLayout.containerWithRoot(container, container.root)
+
+        copy.selected = dockId
+        containers[index] = copy
+        _snapshot = _prepared(DockLayout.snapshotWith(containers, _snapshot.hidden))
+        selectionChanged(selectionMap())
+
         return true
     }
 
     function commit(value) {
         return replaceSnapshot(value, true)
+    }
+
+    function commitRestored(value) {
+        return replaceSnapshot(value, true, true)
     }
 
     // Interactive splitter and geometry updates bypass the undo stack but
@@ -108,7 +176,8 @@ QtObject {
                 id: container.id,
                 geometry: geometry,
                 screen: screenName || container.screen || "",
-                root: container.root
+                root: container.root,
+                selected: container.selected
             })
             _snapshot = _prepared(DockTypes.layoutSnapshot({
                 version: DockLayout.layoutVersion,
@@ -130,6 +199,7 @@ QtObject {
         _redoStack = _redoStack.concat([_snapshot])
         _snapshot = _prepared(previous)
         layoutChanged()
+        selectionChanged(selectionMap())
 
         return true
     }
@@ -143,6 +213,7 @@ QtObject {
         _undoStack = _undoStack.concat([_snapshot])
         _snapshot = _prepared(next)
         layoutChanged()
+        selectionChanged(selectionMap())
 
         return true
     }
@@ -212,6 +283,7 @@ QtObject {
             valid[dockIds[i]] = true
 
         let mainRoot = null
+        let mainSelected = ""
         let mainSeen = false
         const floating = []
         const source = Array.isArray(raw.containers) ? raw.containers : []
@@ -229,6 +301,7 @@ QtObject {
             if (saved.kind === "main") {
                 mainSeen = true
                 mainRoot = nextRoot
+                mainSelected = String(saved.selected || "")
                 continue
             }
             if (!nextRoot)
@@ -239,7 +312,9 @@ QtObject {
                 id: idFactory("float"),
                 geometry: geometry,
                 screen: saved.screen ? String(saved.screen) : "",
-                root: nextRoot
+                root: nextRoot,
+                selected: DockLayout.collectDocks(nextRoot).indexOf(String(saved.selected)) >= 0
+                    ? String(saved.selected) : DockLayout.firstActiveDock(nextRoot)
             }))
         }
 
@@ -286,7 +361,11 @@ QtObject {
 
         return DockTypes.layoutSnapshot({
             version: DockLayout.layoutVersion,
-            containers: [DockTypes.mainContainer({id: "main", root: mainRoot})].concat(floating),
+            containers: [DockTypes.mainContainer({
+                id: "main", root: mainRoot,
+                selected: DockLayout.collectDocks(mainRoot).indexOf(mainSelected) >= 0
+                    ? mainSelected : DockLayout.firstActiveDock(mainRoot)
+            })].concat(floating),
             hidden: hidden
         })
     }

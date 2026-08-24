@@ -158,6 +158,8 @@ Most mutation methods return success values (or a created item for
 | `floatDock(dockId, x, y, width, height)`   | Create a floating container. Geometry arguments are optional. |
 | `dockToFirstGroup(dockId)`                 | Return a dock to the first compatible main group.             |
 | `activateDock(dockId)`                     | Select a dock in its tab group.                               |
+| `focusDock(dockId)`                        | Activate a dock and raise its window if floating.             |
+| `selectedDock(containerId)`                | Returns the ID of the dock selected in the container.         |
 | `hideDock(dockId)`, `showDock(dockId)`     | Change persistent visibility without unregistering.           |
 | `closeDock(dockId)`                        | Apply the dock's close policy.                                |
 | `setSplitRatio(splitId, index, ratio)`     | Resize an adjacent child pair programmatically.               |
@@ -354,29 +356,31 @@ Font tokens use QML's built-in `font` value type and are assigned as complete
 font specifications. This exposes every standard font field, including family,
 point or pixel size, weight, style, capitalization, and letter spacing.
 
-For structural visual changes, set `delegates.*` properties on `DockStyle` or
-the corresponding delegate properties directly on `DockWorkspace`. A delegate
-instance is loaded under a `Loader`, and its contract is exposed as properties
-on `parent`:
+## Delegates
 
-| Delegate                            | Loader properties                                                                                   |
-|-------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `delegates.tab`, `delegates.header` | `workspace`, `dockId`, `dragFrame`, `floatingWindow`, `windowDragEnabled`, `selected`, `compact`    |
-| `delegates.floatingTitleBar`        | `workspace`, `style`, `floatingWindow`, `containerId`, `dockId`, `title`, `iconSource`, `maximized` |
-| `delegates.splitter`                | `style`, `hovered`, `pressed`, `horizontal`                                                         |
-| `delegates.dropIndicator`           | `workspace`, `style`, `zone`                                                                        |
-| `delegates.dragPreview`             | `workspace`, `style`, `dockId`, `title`, `iconSource`, `snapshotSource`                             |
-| `delegates.dropCompass`             | `style`, `zone`                                                                                     |
-| `delegates.placeholder`             | `workspace`, `style`                                                                                |
-| `delegates.floatingDecoration`      | `workspace`, `style`, `containerId`                                                                 |
-| `delegates.overflowMenu`            | `workspace`, `style`, `docks`, `activeDock`                                                         |
+For structural visual changes, set the `xyzDelegate` properties on
+`DockWorkspace`. A delegate instance is loaded under a `Loader`, and its
+contract is exposed as properties on `parent`:
+
+| Delegate                     | Loader properties                                                                                   |
+|------------------------------|-----------------------------------------------------------------------------------------------------|
+| `tabDelegate`                | `workspace`, `dockId`, `dragFrame`, `floatingWindow`, `windowDragEnabled`, `selected`, `compact`    |
+| `headerDelegate`             | `workspace`, `dockId`, `dragFrame`, `floatingWindow`, `windowDragEnabled`, `selected`, `compact`    |
+| `floatingTitleBarDelegate`   | `workspace`, `style`, `floatingWindow`, `containerId`, `dockId`, `title`, `iconSource`, `maximized` |
+| `splitterDelegate`           | `style`, `hovered`, `pressed`, `horizontal`                                                         |
+| `dropIndicatorDelegate`      | `workspace`, `style`, `zone`                                                                        |
+| `dragPreviewDelegate`        | `workspace`, `style`, `dockId`, `title`, `iconSource`, `snapshotSource`                             |
+| `dropCompassDelegate`        | `style`, `zone`                                                                                     |
+| `placeholderDelegate`        | `workspace`, `style`                                                                                |
+| `floatingDecorationDelegate` | `workspace`, `style`, `containerId`                                                                 |
+| `overflowMenuDelegate`       | `workspace`, `style`, `docks`, `activeDock`                                                         |
 
 For example, a custom drag preview can render the captured panel image and add
 application-specific decoration:
 
 ```qml
-DockStyle {
-    delegates.dragPreview: Component {
+DockWorkspace {
+    dragPreviewDelegate: Component {
         Rectangle {
             radius: 8
             color: parent.style.colors.panel

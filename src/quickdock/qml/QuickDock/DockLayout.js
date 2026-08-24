@@ -670,12 +670,13 @@ function snapshotWith(containers, hidden) {
 
 function containerWithRoot(container, nextRoot) {
     if (container.kind === "main")
-        return DockTypes.mainContainer({id: container.id, root: nextRoot})
+        return DockTypes.mainContainer({id: container.id, root: nextRoot, selected: container.selected})
     return DockTypes.floatingContainer({
         id: container.id,
         geometry: container.geometry,
         screen: container.screen || "",
-        root: nextRoot
+        root: nextRoot,
+        selected: container.selected
     })
 }
 
@@ -700,7 +701,20 @@ function mainContainer(containers) {
         if (containers[i].kind === "main")
             return containers[i]
     }
-    return DockTypes.mainContainer({id: "main", root: null})
+    return DockTypes.mainContainer({id: "main", root: null, selected: ""})
+}
+
+function firstActiveDock(node) {
+    if (!node)
+        return ""
+    if (node.kind === "tabs")
+        return node.active || (node.docks.length ? node.docks[0] : "")
+    for (let i = 0; i < node.children.length; ++i) {
+        const dockId = firstActiveDock(node.children[i])
+        if (dockId)
+            return dockId
+    }
+    return ""
 }
 
 function withoutDock(containers, dockId) {

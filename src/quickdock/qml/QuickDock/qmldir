@@ -1,5 +1,7 @@
 module QuickDock
 DockItem 1.0 DockItem.qml
+DockContainer 1.0 DockContainer.qml
+DockContainerView 1.0 DockContainerView.qml
 DockStyle 1.0 DockStyle.qml
 DockWorkspace 1.0 DockWorkspace.qml
 internal DockCommands DockCommands.qml

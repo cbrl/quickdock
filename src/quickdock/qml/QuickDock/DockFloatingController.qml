@@ -110,6 +110,7 @@ QtObject {
 
     function _currentScreenName() {
         const window = workspace.Window.window
+
         // `screen` is a Q_PROPERTY on QWindow that qmllint does not see through
         // the QQuickWindow type returned by the Window attached object.
         // qmllint disable missing-property
@@ -118,32 +119,30 @@ QtObject {
     }
 
     function floatingMinimumSize(node) {
-        const size = workspace._minimumSizeOf(node)
-        const titleBarHeight = DockLayout.collectDocks(node).length > 1
-                ? workspace.style.header.height
-                : 0
+        const size = workspace._minimumSizeOf(node);
+        const titleBarHeight = DockLayout.collectDocks(node).length > 1 ? workspace.style.header.height : 0;
+
+		const width = Math.max(workspace.style.floating.minimumSize.width, size.width);
+		const height = Math.max(workspace.style.floating.minimumSize.height, size.height + titleBarHeight);
+
         return DockTypes.size({
-            width: Math.max(workspace.style.floating.minimumSize.width, size.width),
-            height: Math.max(
-                workspace.style.floating.minimumSize.height,
-                size.height + titleBarHeight
-            )
-        })
+            width: width,
+            height: height
+        });
     }
 
     function floatingMaximumSize(node) {
-        const minimum = floatingMinimumSize(node)
-        const maximum = workspace._maximumSizeOf(node)
-        const titleBarHeight = DockLayout.collectDocks(node).length > 1
-                ? workspace.style.header.height
-                : 0
-        return DockTypes.size({
-            width: Math.max(minimum.width, maximum.width),
-            height: Math.max(
-                minimum.height,
-                Math.min(16777215, maximum.height + titleBarHeight)
-            )
-        })
+        const minimum = floatingMinimumSize(node);
+        const maximum = workspace._maximumSizeOf(node);
+        const titleBarHeight = DockLayout.collectDocks(node).length > 1 ? workspace.style.header.height : 0;
+
+		const width = Math.max(minimum.width, maximum.width);
+		const height = Math.max(
+			minimum.height,
+			Math.min(16777215, maximum.height + titleBarHeight)
+		);
+
+        return DockTypes.size({ width: width, height: height });
     }
 
     function _clampFloatingGeometry(raw, node) {
@@ -151,13 +150,16 @@ QtObject {
         const fallback = style.floating.defaultGeometry
         const minimum = floatingMinimumSize(node)
         const maximum = floatingMaximumSize(node)
+
         let available = null
         const window = workspace.Window.window
+
         // See _currentScreenName() for why `screen` is not statically resolved.
         // qmllint disable missing-property
         if (window && window.screen)
             available = window.screen.availableGeometry
         // qmllint enable missing-property
+
         if (!available || available.width <= 0 || available.height <= 0)
             available = Qt.rect(0, 0, 1920, 1080)
 
@@ -185,6 +187,11 @@ QtObject {
     }
 
     function floatDock(dockId, x, y, width, height) {
+		x = Number(x);
+		y = Number(y);
+		width = Number(width);
+		height = Number(height);
+
         const item = workspace.dockById(dockId)
         if (!item)
             return workspace._error(
@@ -213,28 +220,26 @@ QtObject {
                 )
             )
         )
+
         const preferred = item.preferredSize
         const floatingRoot = workspace._newGroup([dockId], dockId)
         const minimum = floatingMinimumSize(floatingRoot)
         const maximum = floatingMaximumSize(floatingRoot)
-        const hasExplicitPosition = isFinite(Number(x)) && isFinite(Number(y))
+        const hasExplicitPosition = isFinite(x) && isFinite(y)
+
+		const defaultX = origin.x + floatingCount * style.floating.cascade.offset.x
+		const defaultY = origin.y + floatingCount * style.floating.cascade.offset.y
         const rawGeometry = DockTypes.rect({
-            x: isFinite(Number(x))
-                ? Number(x)
-                : origin.x + floatingCount * style.floating.cascade.offset.x,
-            y: isFinite(Number(y))
-                ? Number(y)
-                : origin.y + floatingCount * style.floating.cascade.offset.y,
-            width: isFinite(Number(width)) ? Number(width) : preferred.width,
-            height: isFinite(Number(height)) ? Number(height) : preferred.height
+            x: isFinite(x) ? x : defaultX,
+            y: isFinite(y) ? y : defaultY,
+            width: isFinite(width) ? width : preferred.width,
+            height: isFinite(height) ? height : preferred.height
         })
-        const requestedWidth = isFinite(Number(rawGeometry.width))
-                ? Number(rawGeometry.width)
-                : style.floating.defaultGeometry.width
-        const requestedHeight = isFinite(Number(rawGeometry.height))
-                ? Number(rawGeometry.height)
-                : style.floating.defaultGeometry.height
+
+        const requestedWidth = isFinite(rawGeometry.width) ? rawGeometry.width : style.floating.defaultGeometry.width
+        const requestedHeight = isFinite(rawGeometry.height) ? rawGeometry.height : style.floating.defaultGeometry.height
         const targetScreenName = _currentScreenName()
+
         let geometry = null
         if (hasExplicitPosition) {
             geometry = DockTypes.rect({
@@ -265,11 +270,12 @@ QtObject {
                 id: containerId,
                 geometry: geometry,
                 screen: targetScreenName,
-                root: floatingRoot
+                root: floatingRoot,
+                selected: dockId
             })
         ])
         dockModel.commit(DockLayout.snapshotWith(containers, snapshot.hidden))
-        workspace.dockActivated(dockId)
+        workspace._dockSelected(dockId)
 
         return true
     }

@@ -12,16 +12,21 @@ Window {
     required property DockWorkspace workspace
     required property string containerId
     required property var floatingState
-    readonly property var dockIds: DockLayout.collectDocks(
-        floatingState ? floatingState.root : null
-    )
+    readonly property var dockIds: DockLayout.collectDocks(floatingState ? floatingState.root : null)
     readonly property int dockCount: dockIds.length
     readonly property bool hasDedicatedTitleBar: dockCount > 1
     readonly property string activeDockId: {
         const group = DockLayout.firstGroup(floatingState ? floatingState.root : null)
         return group ? group.active : ""
     }
-    property alias dockingSurface: contentFrame
+    readonly property DockContainer containerRenderer: containerContent.item as DockContainer
+    readonly property Item dockingSurface: containerRenderer ? containerRenderer.dockingSurface : null
+    readonly property size containerMinimumSize: containerRenderer
+		? containerRenderer.minimumSize
+		: workspace._minimumSizeOf(floatingState ? floatingState.root : null)
+    readonly property size containerMaximumSize: containerRenderer
+		? containerRenderer.maximumSize
+		: workspace._maximumSizeOf(floatingState ? floatingState.root : null)
 
     // Qt Quick 3D binds a scene to its window's renderer at the moment the item is reparented into
     // that window. A window that has not yet rendered has no renderer to bind to, and the scene
@@ -45,10 +50,22 @@ Window {
     property rect _resizeStartGeometry: Qt.rect(0, 0, 0, 0)
     objectName: "floatingDockWindow_" + containerId
 
-    minimumWidth: workspace._floatingMinimumSize(floatingState ? floatingState.root : null).width
-    minimumHeight: workspace._floatingMinimumSize(floatingState ? floatingState.root : null).height
-    maximumWidth: workspace._floatingMaximumSize(floatingState ? floatingState.root : null).width
-    maximumHeight: workspace._floatingMaximumSize(floatingState ? floatingState.root : null).height
+    minimumWidth: Math.max(
+        workspace.style.floating.minimumSize.width,
+        containerMinimumSize.width
+    )
+    minimumHeight: Math.max(
+        workspace.style.floating.minimumSize.height,
+        containerMinimumSize.height + (hasDedicatedTitleBar ? workspace.style.header.height : 0)
+    )
+    maximumWidth: Math.max(minimumWidth, containerMaximumSize.width)
+    maximumHeight: Math.max(
+        minimumHeight,
+        Math.min(
+            16777215,
+            containerMaximumSize.height+ (hasDedicatedTitleBar ? workspace.style.header.height : 0)
+        )
+    )
 
     flags: Qt.Window | Qt.FramelessWindowHint
     transientParent: workspace.Window.window
@@ -66,6 +83,7 @@ Window {
     Component.onCompleted: {
         applyFloatingState()
         _ready = true
+        Qt.callLater(publishGeometry)
     }
 
     // frameSwapped is delivered from the render thread, so hand the flag flip
@@ -74,7 +92,7 @@ Window {
     onFrameSwapped: {
         if (!_renderReady && !_renderReadyPending) {
             _renderReadyPending = true
-            Qt.callLater(function() { root._renderReady = true })
+            Qt.callLater(function() { if (root) root._renderReady = true })
         }
     }
 
@@ -82,6 +100,10 @@ Window {
     onYChanged: scheduleGeometryPublish()
     onWidthChanged: scheduleGeometryPublish()
     onHeightChanged: scheduleGeometryPublish()
+    onMinimumWidthChanged: enforceSizeConstraints()
+    onMinimumHeightChanged: enforceSizeConstraints()
+    onMaximumWidthChanged: enforceSizeConstraints()
+    onMaximumHeightChanged: enforceSizeConstraints()
 
     Timer {
         id: resizeSettleTimer
@@ -114,12 +136,55 @@ Window {
         return item ? item.title : activeDockId
     }
 
+    function sizeConstrainedGeometry(raw) {
+        // `availableGeometry` is supplied by the native QScreen object exposed
+        // through Window.screen, but qmllint resolves it as QQuickScreenInfo.
+        // qmllint disable missing-property
+        const available = root.screen && root.screen.availableGeometry
+            ? root.screen.availableGeometry
+            : Qt.rect(0, 0, 1920, 1080)
+        // qmllint enable missing-property
+        const width = Math.min(
+            root.maximumWidth,
+            available.width,
+            Math.max(root.minimumWidth, Math.round(Number(raw.width)))
+        )
+        const height = Math.min(
+            root.maximumHeight,
+            available.height,
+            Math.max(root.minimumHeight, Math.round(Number(raw.height)))
+        )
+        const x = Math.round(Number(raw.x))
+        const y = Math.round(Number(raw.y))
+        return Qt.rect(x, y, width, height)
+    }
+
+    function enforceSizeConstraints() {
+        if (!root._ready || root.visibility !== Window.Windowed)
+            return
+
+        const constrained = sizeConstrainedGeometry(root)
+        if (root.x === constrained.x && root.y === constrained.y
+                && root.width === constrained.width && root.height === constrained.height)
+            return
+
+        root._applyingGeometry = true
+        root.setGeometry(
+            constrained.x,
+            constrained.y,
+            constrained.width,
+            constrained.height
+        )
+        root._applyingGeometry = false
+        Qt.callLater(root.publishGeometry)
+    }
+
     function applyFloatingState() {
         if (!floatingState || !floatingState.geometry
                 || (_ready && visibility !== Window.Windowed))
             return
 
-        const geometry = floatingState.geometry
+        const geometry = sizeConstrainedGeometry(floatingState.geometry)
         if (x === geometry.x && y === geometry.y
                 && width === geometry.width && height === geometry.height)
             return
@@ -332,44 +397,44 @@ Window {
         delegate: root.workspace.floatingTitleBarDelegate
     }
 
-    // The content frame renders the same DockNode tree as the main workspace.
-    // Its origin excludes the dedicated title bar so drop hit-testing remains
-    // aligned with the recursive layout geometry.
-    Rectangle {
-        id: contentFrame
+    QtObject {
+        id: floatingContainerContext
+
+        readonly property DockWorkspace workspace: root.workspace
+        readonly property var floatingWindow: root
+        readonly property string containerId: root.containerId
+        readonly property var containerState: root.floatingState
+        readonly property bool renderReady: root._renderReady
+        readonly property string selectedDockId: root.workspace.selectedDock(root.containerId)
+    }
+
+    // Main and native top-level containers use the same renderer contract.
+    // Window mechanics only consume its declared dockingSurface.
+    Loader {
+        id: containerContent
         anchors {
             left: parent.left
             right: parent.right
             top: floatingTitleBar.bottom
             bottom: parent.bottom
         }
-        color: root.workspace.style.colors.panel
-
-        DockNode {
-            anchors.fill: parent
-            workspace: root.workspace
-            containerId: root.containerId
-            // Same self-referential cycle qmllint cannot close as in DockWorkspace.
-            floatingWindow: root // qmllint disable incompatible-type
-            dedicatedFloatingTitleBar: root.hasDedicatedTitleBar
-
-            // Empty until the window has rendered (see _renderReady above). The
-            // docks stay parked in the workspace for that one frame.
-            node: root._renderReady && root.floatingState ? root.floatingState.root : null
-        }
-
-        Loader {
-            anchors.fill: parent
-            sourceComponent: root.workspace.floatingDecorationDelegate
-            property DockWorkspace workspace: root.workspace
-            property DockStyle style: root.workspace.style
-            property string containerId: root.containerId
+        sourceComponent: root.workspace.containerDelegate
+        onLoaded: {
+            const container = root.containerRenderer
+            if (container) {
+                container.containerContext = floatingContainerContext
+            } else {
+                root.workspace._error(
+                    "invalid-container-delegate",
+                    qsTr("containerDelegate must create a DockContainer")
+                )
+            }
         }
     }
 
     DockDropOverlay {
         id: dropOverlay
-        surface: contentFrame
+        surface: root.dockingSurface
         workspace: root.workspace
         previewObjectName: "floatingDropPreview_" + root.containerId
     }

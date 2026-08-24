@@ -11,21 +11,155 @@ import "DockTypes.js" as DockTypes
 Item {
     id: root
 
-    // Declarative children and style delegates make up the workspace's public
-    // configuration surface. All derived state below comes from the model.
+    // Declarative children, component delegates, and style tokens make up the
+    // workspace's public configuration surface. All derived state below comes
+    // from the model.
     default property list<DockItem> dockItems
 
     property DockStyle style: DockStyle {}
-    property Component tabDelegate: style.delegates.tab
-    property Component headerDelegate: style.delegates.header
-    property Component floatingTitleBarDelegate: style.delegates.floatingTitleBar
-    property Component splitterDelegate: style.delegates.splitter
-    property Component dropIndicatorDelegate: style.delegates.dropIndicator
-    property Component dragPreviewDelegate: style.delegates.dragPreview
-    property Component dropCompassDelegate: style.delegates.dropCompass
-    property Component placeholderDelegate: style.delegates.placeholder
-    property Component floatingDecorationDelegate: style.delegates.floatingDecoration
-    property Component overflowMenuDelegate: style.delegates.overflowMenu
+
+    // qmllint disable missing-property
+    property Component tabDelegate: null
+    property Component headerDelegate: null
+    property Component floatingTitleBarDelegate: null
+    property Component splitterDelegate: Component {
+        Rectangle {
+            color: (parent.hovered || parent.pressed)
+                ? root.style.colors.accent
+                : root.style.colors.splitter
+        }
+    }
+    property Component dropIndicatorDelegate: Component {
+        Rectangle {
+            color: root.style.colors.preview
+            border.color: root.style.colors.accent
+            border.width: root.style.drop.indicator.border.width
+            radius: root.style.drop.indicator.radius
+        }
+    }
+    property Component dragPreviewDelegate: Component {
+        Rectangle {
+            id: dragVisual
+            color: root.style.colors.dragPreviewFallback
+            border.color: root.style.colors.accent
+            border.width: root.style.drag.preview.border.width
+            radius: root.style.drag.preview.radius
+            clip: true
+
+            Image {
+                id: snapshotImage
+                anchors.fill: parent
+                source: dragVisual.parent.snapshotSource
+                visible: status === Image.Ready
+                fillMode: Image.Stretch
+                smooth: true
+            }
+
+            Rectangle {
+                id: fallbackHeader
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    top: parent.top
+                    margins: root.style.drag.preview.border.width
+                }
+                height: root.style.header.height
+                visible: !snapshotImage.visible
+                color: root.style.colors.activeHeader
+
+                Image {
+                    id: fallbackIcon
+                    anchors {
+                        left: parent.left
+                        leftMargin: root.style.header.horizontalPadding
+                        verticalCenter: parent.verticalCenter
+                    }
+                    width: root.style.fonts.glyph.pixelSize
+                    height: root.style.fonts.glyph.pixelSize
+                    source: dragVisual.parent.iconSource
+                    visible: source.toString().length > 0
+                    fillMode: Image.PreserveAspectFit
+                }
+
+                Text {
+                    anchors {
+                        left: fallbackIcon.visible ? fallbackIcon.right : parent.left
+                        leftMargin: fallbackIcon.visible
+                                    ? root.style.header.titleSpacing
+                                    : root.style.header.horizontalPadding
+                        right: parent.right
+                        rightMargin: root.style.header.horizontalPadding
+                        verticalCenter: parent.verticalCenter
+                    }
+                    text: dragVisual.parent.title
+                    color: root.style.colors.activeText
+                    font: root.style.fonts.title
+                    elide: Text.ElideRight
+                }
+            }
+        }
+    }
+    property Component dropCompassDelegate: Component {
+        Item {
+            id: compass
+
+            Repeater {
+                model: [
+                    {zone: "top", column: 1, row: 0},
+                    {zone: "left", column: 0, row: 1},
+                    {zone: "center", column: 1, row: 1},
+                    {zone: "right", column: 2, row: 1},
+                    {zone: "bottom", column: 1, row: 2}
+                ]
+
+                Rectangle {
+                    required property var modelData
+                    width: root.style.drop.compass.cellSize
+                    height: root.style.drop.compass.cellSize
+                    x: modelData.column * (root.style.drop.compass.cellSize + 2)
+                    y: modelData.row * (root.style.drop.compass.cellSize + 2)
+                    radius: root.style.button.radius
+                    color: (compass.parent.zone === modelData.zone)
+                        ? root.style.colors.accent
+                        : root.style.colors.header
+                    border.color: root.style.colors.accent
+                    border.width: 1
+                    opacity: (compass.parent.zone === modelData.zone) ? 1 : 0.85
+                }
+            }
+        }
+    }
+    property Component placeholderDelegate: Component {
+        Text {
+            text: qsTr("Drag a dock here")
+            color: root.style.colors.text
+            opacity: root.style.placeholder.opacity
+            font: root.style.fonts.placeholder
+        }
+    }
+    property Component containerBackgroundDelegate: null
+    property Component containerDecorationDelegate: Component {
+        Rectangle {
+            color: "transparent"
+            border.color: root.style.colors.border
+            border.width: root.style.frame.border.width
+        }
+    }
+    property Component overflowMenuDelegate: null
+    // qmllint enable missing-property
+
+    // Renders every top-level container, including `main`. The loaded item is
+    // given a `containerContext` object and exposes the item that renders the
+    // dock tree as `dockingSurface`. The default is a DockContainerView.
+    property Component containerDelegate: Component {
+        DockContainerView {
+            workspace: containerContext ? containerContext.workspace : null
+            containerId: containerContext ? containerContext.containerId : ""
+            containerState: containerContext ? containerContext.containerState : null
+            floatingWindow: containerContext ? containerContext.floatingWindow : null
+            renderReady: containerContext ? containerContext.renderReady : false
+        }
+    }
 
     property string centralDockId: ""
     property bool dropCompassEnabled: true
@@ -42,6 +176,7 @@ Item {
     signal layoutChanged()
     signal splitRatioChanged(string splitId, int splitterIndex)
     signal dockActivated(string dockId)
+    signal selectionChanged(var selections)
     signal errorOccurred(string code, string message)
     signal dockItemsInitialized()
     signal hostClosingRequested()
@@ -87,37 +222,54 @@ Item {
             root.splitRatioChanged(splitId, splitterIndex)
         }
         onContainerGeometryChanged: floatingController.syncWindows()
+        onSelectionChanged: selections => root.selectionChanged(selections)
     }
 
-    property Item _canvas: Rectangle {
+    QtObject {
+        id: mainContainerContext
+
+        readonly property DockWorkspace workspace: root
+        readonly property var floatingWindow: null
+        readonly property string containerId: "main"
+        readonly property var containerState: root._mainContainer()
+        readonly property bool renderReady: true
+        readonly property string selectedDockId: root.selectedDock(containerId)
+    }
+
+    property Item _canvas: Item {
         parent: root
         x: 0
         y: 0
         width: root.width
         height: root.height
-        color: root.style.colors.background
-
-        DockNode {
-            anchors.fill: parent
-            anchors.margins: root.layoutTree ? 0 : root.style.frame.canvasMargin
-            workspace: root
-            containerId: "main"
-            node: root.layoutTree
-        }
 
         Loader {
-            anchors.centerIn: parent
-            visible: !root.layoutTree
-            sourceComponent: root.placeholderDelegate
-            property DockWorkspace workspace: root
-            property DockStyle style: root.style
+            id: mainContainerContent
+            anchors.fill: parent
+            sourceComponent: root.containerDelegate
+            onLoaded: {
+                const container = item as DockContainer
+                if (container) {
+                    container.containerContext = mainContainerContext
+                } else {
+                    root._error(
+                        "invalid-container-delegate",
+                        qsTr("containerDelegate must create a DockContainer")
+                    )
+                }
+            }
         }
+    }
+
+    readonly property Item _mainDockingSurface: {
+        const container = mainContainerContent.item as DockContainer
+        return container ? container.dockingSurface : null
     }
 
     // Overlays/controllers are shared by the main canvas and floating surfaces.
     DockDropOverlay {
         id: dropOverlay
-        surface: root
+        surface: root._mainDockingSurface
         workspace: root
     }
 
@@ -285,6 +437,31 @@ Item {
         return dockCommands.activateDock(dockId)
     }
 
+    function focusDock(dockId) {
+        if (!activateDock(dockId))
+            return false
+        const window = floatingWindowForDock(dockId)
+        if (window) {
+            window.raise()
+            window.requestActivate()
+        }
+        return true
+    }
+
+    function selectedDock(containerId) {
+        const container = DockLayout.containerById(snapshot.containers, containerId)
+        return container ? container.selected || "" : ""
+    }
+
+    function selections() {
+        return model.selectionMap()
+    }
+
+    function _dockSelected(dockId) {
+        model.selectDock(dockId)
+        dockActivated(dockId)
+    }
+
     function setSplitRatio(splitId, splitterIndex, ratio) {
         return dockCommands.setSplitRatio(splitId, splitterIndex, ratio)
     }
@@ -321,14 +498,6 @@ Item {
             style.header.height,
             style.splitter.size
         )
-    }
-
-    function _floatingMinimumSize(node) {
-        return floatingController.floatingMinimumSize(node)
-    }
-
-    function _floatingMaximumSize(node) {
-        return floatingController.floatingMaximumSize(node)
     }
 
     function _currentScreenName() {
@@ -487,7 +656,7 @@ Item {
         // Active floating windows win hit-testing ties. The main canvas is
         // checked last so a floating surface can receive a drop over it.
         return active.concat(floating).concat([
-            DockTypes.dropSurface({state: _mainContainer(), item: _canvas})
+            DockTypes.dropSurface({state: _mainContainer(), item: _mainDockingSurface})
         ])
     }
 

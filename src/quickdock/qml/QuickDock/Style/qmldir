@@ -3,7 +3,6 @@ module QuickDock.Style
 DockStyleButton 1.0 DockStyleButton.qml
 DockStyleBorder 1.0 DockStyleBorder.qml
 DockStyleColors 1.0 DockStyleColors.qml
-DockStyleDelegates 1.0 DockStyleDelegates.qml
 DockStyleDrag 1.0 DockStyleDrag.qml
 DockStyleDragEdge 1.0 DockStyleDragEdge.qml
 DockStyleDragPreview 1.0 DockStyleDragPreview.qml

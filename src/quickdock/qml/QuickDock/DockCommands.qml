@@ -123,7 +123,7 @@ QtObject {
 
         const nextRoot = DockLayout.withActiveDock(container.root, dockId)
         if (nextRoot === container.root) {
-            workspace.dockActivated(dockId)
+            workspace._dockSelected(dockId)
             return true
         }
 
@@ -131,8 +131,9 @@ QtObject {
         const index = containers.indexOf(container)
 
         containers[index] = DockLayout.containerWithRoot(container, nextRoot)
+        containers[index].selected = dockId
         dockModel.commit(DockLayout.snapshotWith(containers, snapshot.hidden))
-        workspace.dockActivated(dockId)
+        workspace._dockSelected(dockId)
 
         return true
     }
@@ -171,7 +172,7 @@ QtObject {
 
         dockModel.commit(DockLayout.snapshotWith(containers, hidden))
         workspace.dockShown(dockId)
-        workspace.dockActivated(dockId)
+        workspace._dockSelected(dockId)
 
         return true
     }
@@ -259,7 +260,7 @@ QtObject {
             return false
 
         dockModel.commit(DockLayout.snapshotWith(containers, snapshot.hidden))
-        workspace.dockActivated(dockId)
+        workspace._dockSelected(dockId)
 
         return true
     }
@@ -393,7 +394,7 @@ QtObject {
                     const sourceIndex = containers.indexOf(source)
                     containers[sourceIndex] = DockLayout.containerWithRoot(source, nextRoot)
                     dockModel.commit(DockLayout.snapshotWith(containers, snapshot.hidden))
-                    workspace.dockActivated(dockId)
+                    workspace._dockSelected(dockId)
                     return true
                 }
                 if (sourceGroup.docks.length === 1)
@@ -451,7 +452,7 @@ QtObject {
 
         containers[targetIndex] = DockLayout.containerWithRoot(target, nextRoot)
         dockModel.commit(DockLayout.snapshotWith(containers, snapshot.hidden))
-        workspace.dockActivated(dockId)
+        workspace._dockSelected(dockId)
 
         return true
     }
@@ -528,7 +529,7 @@ QtObject {
 
         const activeGroup = DockLayout.firstGroup(source.root)
         if (activeGroup)
-            workspace.dockActivated(activeGroup.active)
+            workspace._dockSelected(activeGroup.active)
         return true
     }
 
@@ -587,7 +588,7 @@ QtObject {
                     qsTr("The docking layout is invalid")
                 )
 
-            dockModel.commit(next)
+            dockModel.commitRestored(next)
             _ensureCentralDock()
             for (let i = 0; i < next.containers.length; ++i)
                 _emitActiveDocks(next.containers[i].root)
@@ -602,7 +603,7 @@ QtObject {
         if (!node)
             return
         if (node.kind === "tabs") {
-            workspace.dockActivated(node.active)
+            workspace._dockSelected(node.active)
             return
         }
 

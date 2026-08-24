@@ -43,20 +43,22 @@ class SplitNode {
 
 // Containers and snapshots make up the persisted versioned layout document.
 class MainContainer {
-    constructor({id, root}) {
+    constructor({id, root, selected}) {
         this.id = id
         this.kind = "main"
         this.root = root
+        this.selected = selected || ""
     }
 }
 
 class FloatingContainer {
-    constructor({id, geometry, screen, root}) {
+    constructor({id, geometry, screen, root, selected}) {
         this.id = id
         this.kind = "floating"
         this.geometry = geometry
         this.screen = screen
         this.root = root
+        this.selected = selected || ""
     }
 }
 

@@ -1,4 +1,4 @@
-"""Decode and inspect version 2 QuickDock layout snapshots."""
+"""Decode and inspect QuickDock layout snapshots."""
 
 from __future__ import annotations
 

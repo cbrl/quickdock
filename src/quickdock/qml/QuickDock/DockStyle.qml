@@ -3,8 +3,8 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QuickDock.Style 1.0
 
-// Theme and delegate API shared by every workspace surface. Consumers
-// can override individual tokens or provide custom visual components.
+// Visual tokens shared by every workspace surface. Component substitution is
+// configured through the delegate properties on DockWorkspace.
 QtObject {
     id: root
     objectName: "dockStyle"
@@ -99,7 +99,4 @@ QtObject {
     readonly property DockStyleFloating floating: DockStyleFloating {}
     readonly property DockStylePlaceholder placeholder: DockStylePlaceholder {}
     readonly property DockStyleGlyphs glyphs: DockStyleGlyphs {}
-    readonly property DockStyleDelegates delegates: DockStyleDelegates {
-        style: root
-    }
 }
