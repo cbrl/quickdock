@@ -268,11 +268,36 @@ Item {
         return container ? container.dockingSurface : null
     }
 
+    // Visible DockGroups publish their actual tab geometry for drag hit tests.
+    // The key includes the container because node ids are only model identities.
+    property var _dockGroupViews: ({})
+
+    function _dockGroupViewKey(containerId, groupId) {
+        return containerId + "\n" + groupId
+    }
+
+    function _registerDockGroup(group) {
+        if (group && group.nodeId)
+            _dockGroupViews[_dockGroupViewKey(group.containerId, group.nodeId)] = group
+    }
+
+    function _unregisterDockGroup(containerId, groupId, group) {
+        const key = _dockGroupViewKey(containerId, groupId)
+        if (_dockGroupViews[key] === group)
+            delete _dockGroupViews[key]
+    }
+
+    function _tabDropInfo(containerId, groupId, globalPoint, excludedDockId) {
+        const group = _dockGroupViews[_dockGroupViewKey(containerId, groupId)]
+        return group ? group.tabDropInfo(globalPoint, excludedDockId) : null
+    }
+
     // Overlays/controllers are shared by the main canvas and floating surfaces.
     DockDropOverlay {
         id: dropOverlay
         surface: root._mainDockingSurface
         workspace: root
+        previewObjectName: "dockDropPreview_main"
     }
 
     DockDragController {

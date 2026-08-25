@@ -5,9 +5,9 @@ import QtQuick.Window
 import "DockLayout.js" as DockLayout
 import "DockTypes.js" as DockTypes
 
-// Owns floating windows and the floating-geometry math (min/max size, screen clamping, cascade
-// placement) that only floating containers need. Creates/destroys DockFloatingWindow instances to
-// match the snapshot.
+// Owns floating windows and the geometry rules (size limits, screen clamping,
+// and cascade placement) that apply only to floating containers. It creates
+// and destroys DockFloatingWindow instances to match the snapshot.
 QtObject {
     id: root
     objectName: "dockFloatingController"
@@ -43,6 +43,8 @@ QtObject {
             wanted[container.id] = true
             const existing = _windows[container.id]
             if (existing) {
+                // The snapshot is the source of truth. Keep the native window
+                // instance so Qt does not lose transient-parent state mid-use.
                 existing.floatingState = container
                 continue
             }
@@ -79,6 +81,8 @@ QtObject {
     }
 
     function windowForDock(dockId) {
+        // Floating layouts can contain splits and tabs, so the container id is
+        // found from the tree rather than from a one-dock window assumption.
         const windows = _windowList()
         for (let i = 0; i < windows.length; ++i) {
             if (DockLayout.collectDocks(windows[i].floatingState.root).indexOf(dockId) >= 0)
@@ -122,12 +126,18 @@ QtObject {
         // qmllint enable missing-property
     }
 
+    // A multi-dock floating container renders its title bar outside the layout
+    // tree, so reserve that height at the native-window boundary.
+    function _floatingTitleBarHeight(node) {
+        return DockLayout.collectDocks(node).length > 1 ? workspace.style.header.height : 0;
+    }
+
     function floatingMinimumSize(node) {
         const size = workspace._minimumSizeOf(node);
-        const titleBarHeight = DockLayout.collectDocks(node).length > 1 ? workspace.style.header.height : 0;
+        const titleBarHeight = _floatingTitleBarHeight(node);
 
-		const width = Math.max(workspace.style.floating.minimumSize.width, size.width);
-		const height = Math.max(workspace.style.floating.minimumSize.height, size.height + titleBarHeight);
+        const width = Math.max(workspace.style.floating.minimumSize.width, size.width);
+        const height = Math.max(workspace.style.floating.minimumSize.height, size.height + titleBarHeight);
 
         return DockTypes.size({
             width: width,
@@ -138,13 +148,14 @@ QtObject {
     function floatingMaximumSize(node) {
         const minimum = floatingMinimumSize(node);
         const maximum = workspace._maximumSizeOf(node);
-        const titleBarHeight = DockLayout.collectDocks(node).length > 1 ? workspace.style.header.height : 0;
+        const titleBarHeight = _floatingTitleBarHeight(node);
 
-		const width = Math.max(minimum.width, maximum.width);
-		const height = Math.max(
-			minimum.height,
-			Math.min(16777215, maximum.height + titleBarHeight)
-		);
+        const width = Math.max(minimum.width, maximum.width);
+        const height = Math.max(
+            minimum.height,
+            // Qt uses 16,777,215 as the largest supported QML item dimension.
+            Math.min(16777215, maximum.height + titleBarHeight)
+        );
 
         return DockTypes.size({ width: width, height: height });
     }
@@ -184,6 +195,8 @@ QtObject {
         let y = isFinite(Number(raw && raw.y))
                 ? Math.round(Number(raw.y)) : fallback.y
 
+        // Keep restored/default windows reachable after a display layout has
+        // changed. Width and height are already limited to the same area.
         x = Math.max(available.x, Math.min(x, available.x + available.width - width))
         y = Math.max(available.y, Math.min(y, available.y + available.height - height))
 
@@ -191,10 +204,10 @@ QtObject {
     }
 
     function floatDock(dockId, x, y, width, height) {
-		x = Number(x);
-		y = Number(y);
-		width = Number(width);
-		height = Number(height);
+        x = Number(x);
+        y = Number(y);
+        width = Number(width);
+        height = Number(height);
 
         const item = workspace.dockById(dockId)
         if (!item)
@@ -210,6 +223,9 @@ QtObject {
             )
 
         const style = workspace.style
+
+        // Remove first so re-floating an existing dock does not count its old
+        // container when choosing the next cascade position.
         const removal = DockLayout.withoutDock(snapshot.containers, dockId)
         const floatingCount = removal.filter(container => container.kind === "floating").length
         const origin = workspace.mapToGlobal(
@@ -231,8 +247,8 @@ QtObject {
         const maximum = floatingMaximumSize(floatingRoot)
         const hasExplicitPosition = isFinite(x) && isFinite(y)
 
-		const defaultX = origin.x + floatingCount * style.floating.cascade.offset.x
-		const defaultY = origin.y + floatingCount * style.floating.cascade.offset.y
+        const defaultX = origin.x + floatingCount * style.floating.cascade.offset.x
+        const defaultY = origin.y + floatingCount * style.floating.cascade.offset.y
         const rawGeometry = DockTypes.rect({
             x: isFinite(x) ? x : defaultX,
             y: isFinite(y) ? y : defaultY,
@@ -246,6 +262,9 @@ QtObject {
 
         let geometry = null
         if (hasExplicitPosition) {
+            // Explicit coordinates are often supplied by an application that
+            // manages its own multi-screen placement. Honor that position but
+            // still enforce the dock's content-size contract.
             geometry = DockTypes.rect({
                 x: Math.round(rawGeometry.x),
                 y: Math.round(rawGeometry.y),
@@ -339,6 +358,8 @@ QtObject {
     }
 
     function _withFloatingWindow(dockId, method) {
+        // Keep the public maximize/restore operations consistent: resolve the
+        // owning window once and return the same error for docked docks.
         const window = windowForDock(dockId)
         if (!window)
             return workspace._error(

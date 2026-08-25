@@ -20,11 +20,70 @@ Rectangle {
         ? node.docks.length * workspace.style.tab.minimumWidth : 0
     readonly property bool tabsOverflow: node && node.kind === "tabs"
         && (minimumTabsWidth > width || tabRow.width > width)
+    property string _registeredNodeId: ""
 
     color: workspace.style.colors.panel
     border.color: workspace.style.colors.border
     border.width: workspace.style.frame.border.width
     clip: true
+
+    function _refreshRegistration() {
+        if (_registeredNodeId === nodeId)
+            return
+        if (_registeredNodeId)
+            workspace._unregisterDockGroup(containerId, _registeredNodeId, root)
+        _registeredNodeId = nodeId
+        if (_registeredNodeId)
+            workspace._registerDockGroup(root)
+    }
+
+    // Resolve an insertion against the rendered tabs rather than estimating
+    // it from the width of the complete group. When reordering in place, the
+    // dragged tab is omitted so the returned index is already the final index.
+    function tabDropInfo(globalPoint, excludedDockId) {
+        if (!tabFlickable.visible || !node || node.kind !== "tabs")
+            return null
+
+        const point = tabRow.mapFromGlobal(globalPoint)
+        const slots = []
+        for (let i = 0; i < tabRepeater.count; ++i) {
+            const slot = tabRepeater.itemAt(i)
+            if (slot && slot.modelData !== excludedDockId)
+                slots.push(slot)
+        }
+        if (!slots.length)
+            return null
+
+        let index = 0
+        while (index < slots.length
+                && point.x >= slots[index].x + slots[index].width / 2)
+            ++index
+
+        const boundary = index < slots.length
+            ? slots[index].x
+            : slots[slots.length - 1].x + slots[slots.length - 1].width
+        const inViewport = tabFlickable.mapFromItem(tabRow, boundary, 0)
+        const markerX = Math.max(0, Math.min(tabFlickable.width, inViewport.x))
+        const markerTop = Math.max(0, Math.min(
+            tabFlickable.height / 2,
+            workspace.style.drop.indicator.tabMargin
+        ))
+        const markerGlobal = tabFlickable.mapToGlobal(markerX, markerTop)
+
+        return {
+            index: index,
+            x: markerGlobal.x,
+            y: markerGlobal.y,
+            height: Math.max(1, tabFlickable.height - markerTop * 2)
+        }
+    }
+
+    onNodeIdChanged: _refreshRegistration()
+    Component.onCompleted: _refreshRegistration()
+    Component.onDestruction: {
+        if (_registeredNodeId)
+            workspace._unregisterDockGroup(containerId, _registeredNodeId, root)
+    }
 
     // A single-dock group uses the full header delegate. Multi-dock groups
     // replace it with a horizontally scrollable tab row.
@@ -75,6 +134,7 @@ Rectangle {
                 height: parent.height
 
                 Repeater {
+                    id: tabRepeater
                     model: root.node && root.node.kind === "tabs" ? root.node.docks : []
 
                     Item {

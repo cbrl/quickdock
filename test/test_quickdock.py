@@ -302,18 +302,12 @@ def workspace_center(workspace) -> QPointF:
 
 
 def tab_drop_point(workspace, index: int) -> QPointF:
-    """Global point that the tab hit test resolves to ``index``.
-
-    The insertion index is derived from the fraction of the group width under
-    the pointer, not from the rendered tab widths.
-    """
-
+    """Global point just inside the rendered tab at insertion ``index``."""
     docks = main_container(saved(workspace))["root"]["docks"]
-    return workspace.mapToGlobal(
-        QPointF(
-            workspace.width() * index / len(docks),
-            token(workspace, "header.height") / 2,
-        )
+    tab = find_item(workspace, f"dockDragArea_{docks[index]}", visible=True)
+    assert tab is not None
+    return tab.mapToGlobal(
+        QPointF(1, tab.height() / 2)
     )
 
 
@@ -771,7 +765,7 @@ def test_outer_edge_drop_splits_the_root_at_the_style_ratio(workspace, pump):
     assert collect_docks(root["children"][0]) == ["inspector"]
 
 
-def test_tab_drag_reorders_within_the_group(workspace):
+def test_tab_drag_reorders_within_the_group(workspace, pump):
     root = main_container(saved(workspace))["root"]
     assert root["docks"] == list(DOCK_IDS)
 
@@ -780,6 +774,13 @@ def test_tab_drag_reorders_within_the_group(workspace):
     target = qml_value(workspace.updateDockDrag("console", point))
     assert target["zone"] == "center"
     assert target["tabIndex"] == 1
+
+    indicator = find_item(workspace, "dockDropPreview_main")
+    assert indicator is not None
+    assert indicator.property("visible")
+    assert indicator.property("zone") == "tab"
+    assert indicator.width() == token(workspace, "drop.indicator.tabWidth")
+    assert indicator.height() < token(workspace, "header.height")
     assert workspace.finishDockedDrag("console", point, 0, 0, 400, 300)
 
     assert main_container(saved(workspace))["root"]["docks"] == [
@@ -787,6 +788,21 @@ def test_tab_drag_reorders_within_the_group(workspace):
         "console",
         "outline",
         "inspector",
+    ]
+
+    # Moving right uses a final index calculated without the dragged tab.
+    pump()
+    last_tab = find_item(workspace, "dockDragArea_inspector", visible=True)
+    point = last_tab.mapToGlobal(QPointF(last_tab.width() - 1, last_tab.height() / 2))
+    assert workspace.beginDockDrag("scene", False)
+    target = qml_value(workspace.updateDockDrag("scene", point))
+    assert target["tabIndex"] == 4
+    assert workspace.finishDockedDrag("scene", point, 0, 0, 400, 300)
+    assert main_container(saved(workspace))["root"]["docks"] == [
+        "console",
+        "outline",
+        "inspector",
+        "scene",
     ]
 
 

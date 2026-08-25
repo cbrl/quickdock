@@ -34,6 +34,8 @@ QtObject {
     }
 
     function beginContainer(containerId, dockId) {
+        // A container drag must never dock back into its own surface. Unlike a
+        // dock drag, it has no source group to exclude.
         begin(dockId, true)
         draggedContainerId = containerId
         sourceContainerId = containerId
@@ -89,24 +91,6 @@ QtObject {
     function _outerEdgeZone(x, y, width, height) {
         const band = Math.max(1, workspace.style.drag.edge.outerBandPixels)
         return _nearestEdgeZone(x, y, width, height, band, band)
-    }
-
-    // Hit-testing returns the tab group and rectangle under the pointer. Tab
-    // indices are derived separately so center drops can reorder tabs.
-    function _tabIndex(node, rect, point) {
-        if (!node || node.kind !== "tabs" || !node.docks.length)
-            return -1
-        if (point.y > rect.y + workspace.style.header.height)
-            return -1
-
-        const relative = Math.max(0, Math.min(rect.width, point.x - rect.x))
-        return Math.max(
-            0,
-            Math.min(
-                node.docks.length,
-                Math.round(relative / Math.max(1, rect.width) * node.docks.length)
-            )
-        )
     }
 
     function _hitNode(node, rect, point) {
@@ -182,22 +166,38 @@ QtObject {
         return result
     }
 
-    // Update scans floating surfaces first, then the main canvas, and publishes
-    // one accepted preview target to the workspace.
-    function update(dockId, globalPoint) {
-        _target = null
-        workspace._hideDropPreviews()
+    // A global drag point needs a separate local coordinate for each native
+    // window. The surface order supplied by the workspace already puts active
+    // floating windows first, so this list also defines hit-test priority.
+	function _visibleLocalSurfaces(globalPoint) {
         const surfaces = workspace._dropContainerSurfaces()
 
+		let results = [];
         for (let i = 0; i < surfaces.length; ++i) {
             const surface = surfaces[i]
-            if (!surface || !surface.item || !surface.item.visible
-                    || surface.item.width < 1 || surface.item.height < 1)
+            if (!surface || !surface.item || !surface.item.visible || surface.item.width < 1 || surface.item.height < 1)
                 continue
 
             const local = surface.item.mapFromGlobal(globalPoint)
             if (local.x < 0 || local.y < 0 || local.x > surface.item.width || local.y > surface.item.height)
                 continue
+
+			results.push({ surface: surface, localPoint: local });
+		}
+
+		return results;
+	}
+
+    // Update scans floating surfaces first, then the main canvas, and publishes
+    // one accepted preview target to the workspace.
+    function update(dockId, globalPoint) {
+        _target = null
+        workspace._hideDropPreviews()
+        const surfaces = _visibleLocalSurfaces(globalPoint)
+
+        for (let i = 0; i < surfaces.length; ++i) {
+            const surface = surfaces[i].surface
+			const local = surfaces[i].localPoint
 
             const containerRect = DockTypes.rect({
                 x: 0,
@@ -211,6 +211,7 @@ QtObject {
                 containerRect.width,
                 containerRect.height
             )
+
             let hit = null
             let zone = outerZone
             let outer = outerZone !== "center"
@@ -241,14 +242,50 @@ QtObject {
             }
 
             const groupId = outer ? "" : hit.groupId
+
+            // A whole floating container cannot target itself. A dock drag may
+            // also opt out of its source surface, so pulling a header away has
+            // a reliable path to creating a floating window.
             if (draggedContainerId && surface.state.id === sourceContainerId)
                 continue
-            if (ignoreSourceSurface && surface.state.id === sourceContainerId
-                    && (outer || groupId === sourceGroupId))
+            if (ignoreSourceSurface && surface.state.id === sourceContainerId && (outer || groupId === sourceGroupId))
                 continue
 
             const targetRect = outer ? containerRect : hit.rect
-            const tabIndex = !outer && zone === "center" ? _tabIndex(hit.node, targetRect, local) : -1
+            const overTabBar = !outer
+				&& zone === "center"
+				&& hit.node
+                && hit.node.kind === "tabs"
+                && local.y <= hit.rect.y + workspace.style.header.height
+            const excludedDockId = overTabBar && surface.state.id === sourceContainerId && hit.groupId === sourceGroupId
+                ? dockId
+				: ""
+            // Tab insertion is treated as a center drop. Policy checks and
+            // model mutations are the same, while the view provides a precise
+            // insertion boundary and a distinct visual marker.
+            const tabDrop = overTabBar
+                ? workspace._tabDropInfo(
+                    surface.state.id,
+                    hit.groupId,
+                    globalPoint,
+                    excludedDockId
+                )
+				: null
+
+            // A tab-bar insertion always comes from DockGroup's rendered-tab
+            // geometry. Other center drops leave tabIndex at -1, which the
+            // command layer treats as an append (or activation in-place).
+            let tabIndex = tabDrop ? tabDrop.index : -1
+
+            // DockCommands accepts an insertion boundary in the current list
+            // and removes the source tab before moving it. Convert the final
+            // index calculated without that tab back to that boundary.
+            if (tabDrop && excludedDockId) {
+                const sourceIndex = hit.node.docks.indexOf(excludedDockId)
+                if (sourceIndex >= 0 && tabIndex > sourceIndex)
+                    ++tabIndex
+            }
+
             const candidate = DockTypes.dropTarget({
                 containerId: surface.state.id,
                 groupId: groupId,
@@ -263,12 +300,31 @@ QtObject {
                 continue
 
             _target = candidate
-            workspace._showDropPreview(
-                surface.state.id,
-                _previewRect(targetRect, zone),
-                targetRect,
-                zone
-            )
+            if (tabDrop) {
+                // tabDrop is in global coordinates because a DockGroup may
+                // live in either the main window or a floating window. Convert
+                // it only after the winning surface is known.
+                const marker = surface.item.mapFromGlobal(Qt.point(tabDrop.x, tabDrop.y))
+                const markerWidth = workspace.style.drop.indicator.tabWidth
+                workspace._showDropPreview(
+                    surface.state.id,
+                    DockTypes.rect({
+                        x: marker.x - markerWidth / 2,
+                        y: marker.y,
+                        width: markerWidth,
+                        height: tabDrop.height
+                    }),
+                    targetRect,
+                    "tab"
+                )
+            } else {
+                workspace._showDropPreview(
+                    surface.state.id,
+                    _previewRect(targetRect, zone),
+                    targetRect,
+                    zone
+                )
+            }
 
             return candidate
         }
@@ -311,6 +367,9 @@ QtObject {
                 ? floatingWindow.screen.name
                 : workspace._currentScreenName()
 
+        // Persist the native window's final geometry before attempting a drop.
+        // If no target accepts it, the floating container remains where the
+        // user released it.
         workspace._updateFloatingGeometry(containerId, x, y, width, height, screenName)
         update(dockId, globalPoint)
 
@@ -338,6 +397,8 @@ QtObject {
                 ? floatingWindow.screen.name
                 : workspace._currentScreenName()
 
+        // As with a single floating dock, save the move even when the release
+        // does not result in docking the container.
         workspace._updateFloatingGeometry(containerId, x, y, width, height, screenName)
         updateContainer(containerId, globalPoint)
 

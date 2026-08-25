@@ -47,7 +47,10 @@ QtObject {
         _preview.zone = zone
         _preview.visible = true
 
-        if (root.workspace.dropCompassEnabled && root.workspace.dropCompassDelegate) {
+        // A tab insertion marker is self-explanatory and deliberately distinct
+        // from the panel/split preview, so it does not use the drop compass.
+        if (zone !== "tab" && root.workspace.dropCompassEnabled
+                && root.workspace.dropCompassDelegate) {
             _compass.x = Math.round(
                 targetRect.x + (targetRect.width - _compass.width) / 2
             )
@@ -56,6 +59,8 @@ QtObject {
             )
             _compass.zone = zone
             _compass.visible = true
+        } else {
+            _compass.visible = false
         }
     }
 

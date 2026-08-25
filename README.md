@@ -367,7 +367,7 @@ contract is exposed as properties on `parent`:
 | `headerDelegate`             | `workspace`, `dockId`, `dragFrame`, `floatingWindow`, `windowDragEnabled`, `selected`, `compact`    |
 | `floatingTitleBarDelegate`   | `workspace`, `style`, `floatingWindow`, `containerId`, `dockId`, `title`, `iconSource`, `maximized` |
 | `splitterDelegate`           | `style`, `hovered`, `pressed`, `horizontal`                                                         |
-| `dropIndicatorDelegate`      | `workspace`, `style`, `zone`                                                                        |
+| `dropIndicatorDelegate`      | `workspace`, `style`, `zone` (`tab` identifies a tab insertion marker)                              |
 | `dragPreviewDelegate`        | `workspace`, `style`, `dockId`, `title`, `iconSource`, `snapshotSource`                             |
 | `dropCompassDelegate`        | `style`, `zone`                                                                                     |
 | `placeholderDelegate`        | `workspace`, `style`                                                                                |
