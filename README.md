@@ -182,17 +182,17 @@ workspace.isVisible("outline")
 workspace.containerOf("outline")
 workspace.neighborsOf("outline")
 
-workspace.snapshot       // Current value. Treat as read-only.
+workspace.snapshot       // Current workspace layout
 workspace.layoutTree     // Main container root
 workspace.hiddenDocks
 workspace.layoutVersion
 ```
 
-PySide exposes `QQuickItem.isVisible()` as an inherited method, so Python code
-that invokes the dock query through a wrapped workspace can use
-`isDockVisible(dockId)`. QML code uses `isVisible(dockId)` directly.
+**Note:** PySide exposes `QQuickItem.isVisible()` as an inherited method, so
+Python code that invokes the dock query through a wrapped workspace can use
+`isDockVisible(dockId)` instead. QML code uses `isVisible(dockId)` directly.
 
-Workspace signals are:
+### Workspace signals
 
 | Signal                 | Parameters                 | Purpose                                                                                    |
 |------------------------|----------------------------|--------------------------------------------------------------------------------------------|
@@ -208,7 +208,7 @@ Workspace signals are:
 | `dockHidden`           | `dockId`                   | A dock was hidden.                                                                         |
 | `dockShown`            | `dockId`                   | A dock was shown.                                                                          |
 
-`dockItemsInitialized()` is the earliest safe point for `restoreLayout()`.
+**Note**: `dockItemsInitialized()` is the earliest safe point to call `restoreLayout()`.
 
 ### Error codes
 
@@ -242,11 +242,10 @@ may be translated.
 
 ## Saving layouts
 
-`saveLayout()` returns JSON. `restoreLayout(stringOrObject)` validates the
-version, sanitizes it against currently registered dock IDs, clamps floating
-geometry, and returns whether the state was accepted. Unknown saved docks are
-discarded. Newly registered docks absent from the snapshot are appended to the
-main layout.
+`saveLayout()` returns JSON. `restoreLayout(stringOrObject)` validates and
+sanitizes the layout, and returns whether the state was accepted. Unknown saved
+docks are discarded. Newly registered docks absent from the snapshot are
+appended to the main layout.
 
 The layout has one main container and zero or more floating containers:
 
@@ -399,11 +398,10 @@ DockWorkspace {
 ```
 
 `headerDelegate`, `tabDelegate`, and `floatingTitleBarDelegate` are complete
-replacements, not visual background layers. A custom implementation is
-responsible for the activation, drag, close, dock, float, and maximize controls
-it wants to expose. Prefer `TapHandler`, `DragHandler`, and `HoverHandler` there
-as well so it preserves the built-in mouse, touch, stylus, and
-gesture-composition behavior.
+replacements, so a custom implementation is responsible for the activation,
+drag, close, dock, float, and maximize controls it wants to expose. Prefer
+`TapHandler`, `DragHandler`, and `HoverHandler` there as well so it preserves
+the built-in mouse, touch, stylus, and gesture behavior.
 
 ### Implementing drag in a custom header or tab
 
