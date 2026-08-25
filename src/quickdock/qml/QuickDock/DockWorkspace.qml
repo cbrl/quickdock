@@ -143,6 +143,9 @@ Item {
             color: "transparent"
             border.color: root.style.colors.border
             border.width: root.style.frame.border.width
+            radius: parent && parent.containerId === "main"
+                ? root.style.frame.radius
+                : 0
         }
     }
     property Component overflowMenuDelegate: null
