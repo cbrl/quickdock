@@ -13,6 +13,14 @@ DockContainer {
     property var floatingWindow: null
     property bool renderReady: true
 
+    // Loader delegates receive containerContext after construction. Retain the
+    // valid workspace for this view's lifetime so child teardown never sees a
+    // transient null required property.
+    onContainerContextChanged: {
+        if (containerContext && containerContext.workspace)
+            workspace = containerContext.workspace
+    }
+
     dockingSurface: root
     color: workspace ? workspace.style.colors.panel : "transparent"
 
@@ -25,16 +33,21 @@ DockContainer {
         property string containerId: root.containerId
     }
 
-    DockNode {
+    Loader {
         anchors.fill: parent
-        workspace: root.workspace
-        containerId: root.containerId
-        floatingWindow: root.floatingWindow
-        dedicatedFloatingTitleBar: root.floatingWindow ? root.floatingWindow.hasDedicatedTitleBar : false
+        active: !!root.workspace
+        sourceComponent: Component {
+            DockNode {
+                workspace: root.workspace
+                containerId: root.containerId
+                floatingWindow: root.floatingWindow
+                dedicatedFloatingTitleBar: root.floatingWindow ? root.floatingWindow.hasDedicatedTitleBar : false
 
-        // Floating windows delay attachment until their renderer is ready.
-        // Main-window or application-owned uses can render immediately.
-        node: (root.workspace && root.renderReady && root.containerState) ? root.containerState.root : null
+                // Floating windows delay attachment until their renderer is ready.
+                // Main-window or application-owned uses can render immediately.
+                node: (root.renderReady && root.containerState) ? root.containerState.root : null
+            }
+        }
     }
 
     Loader {

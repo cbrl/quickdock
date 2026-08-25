@@ -378,6 +378,13 @@ Window {
         dropOverlay.hide()
     }
 
+    // Unload workspace-bound delegates before the Window teardown clears its
+    // required properties. This also lets DockContentHost park its DockItem
+    // while the registry is still available.
+    function prepareForDestruction() {
+        containerContent.active = false
+    }
+
     // Multi-dock containers get window-level chrome. This keeps native-window
     // movement and maximize/dock actions separate from the individual tabs.
     DockFloatingTitleBarSlot {
@@ -400,7 +407,10 @@ Window {
     QtObject {
         id: floatingContainerContext
 
-        readonly property DockWorkspace workspace: root.workspace
+        // Keep a direct reference rather than a binding through the Window.
+        // Window teardown clears required properties before loaded delegates
+        // are destroyed, while the workspace itself is still alive.
+        property DockWorkspace workspace: null
         readonly property var floatingWindow: root
         readonly property string containerId: root.containerId
         readonly property var containerState: root.floatingState
@@ -420,6 +430,7 @@ Window {
         }
         sourceComponent: root.workspace.containerDelegate
         onLoaded: {
+            floatingContainerContext.workspace = root.workspace
             const container = root.containerRenderer
             if (container) {
                 container.containerContext = floatingContainerContext

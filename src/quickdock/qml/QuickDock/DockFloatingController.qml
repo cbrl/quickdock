@@ -71,8 +71,10 @@ QtObject {
 
             const removed = _windows[id]
             delete _windows[id]
-            if (removed)
+            if (removed) {
+                removed.prepareForDestruction()
                 removed.destroy()
+            }
         }
     }
 
@@ -103,8 +105,10 @@ QtObject {
 
     function _destroyAllWindows() {
         const windows = _windowList()
-        for (let i = 0; i < windows.length; ++i)
+        for (let i = 0; i < windows.length; ++i) {
+            windows[i].prepareForDestruction()
             windows[i].destroy()
+        }
         _windows = {}
     }
 

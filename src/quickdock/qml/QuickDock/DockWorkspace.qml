@@ -153,7 +153,6 @@ Item {
     // dock tree as `dockingSurface`. The default is a DockContainerView.
     property Component containerDelegate: Component {
         DockContainerView {
-            workspace: containerContext ? containerContext.workspace : null
             containerId: containerContext ? containerContext.containerId : ""
             containerState: containerContext ? containerContext.containerState : null
             floatingWindow: containerContext ? containerContext.floatingWindow : null
