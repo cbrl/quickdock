@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated locally when building executables with embedded Qt resources.
+resources_rc.py

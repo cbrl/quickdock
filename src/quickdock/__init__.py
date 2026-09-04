@@ -4,17 +4,27 @@ The implementation is QML-only.  This module only provides the import-path
 helper used by Python-hosted Qt Quick applications.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
-from PySide6.QtCore import QDir
+from PySide6.QtCore import QDir, QFile
 from PySide6.QtQml import QQmlEngine
+
+try:
+    import quickdock.resources_rc as _resources_rc
+    assert _resources_rc
+except ImportError:
+    _resources_rc = None
 
 from .layout import LAYOUT_VERSION, containers_of, decode_layout, docks_in
 
 
-QML_IMPORT_PATH = Path(__file__).parent / "qml"
+_QML_RESOURCE_PATH = "qrc:/quickdock/qml"
+_QML_SOURCE_PATH = Path(__file__).parent / "qml"
+QML_IMPORT_PATH = (
+    _QML_RESOURCE_PATH
+    if QFile.exists(":/quickdock/qml/QuickDock/qmldir")
+    else QDir.fromNativeSeparators(str(_QML_SOURCE_PATH))
+)
 
 
 def install_docking(engine: QQmlEngine) -> None:
@@ -22,9 +32,8 @@ def install_docking(engine: QQmlEngine) -> None:
     if not isinstance(engine, QQmlEngine):
         raise TypeError("engine must be a QQmlEngine")
 
-    import_path = QDir.fromNativeSeparators(str(QML_IMPORT_PATH))
-    if import_path not in engine.importPathList():
-        engine.addImportPath(import_path)
+    if QML_IMPORT_PATH not in engine.importPathList():
+        engine.addImportPath(QML_IMPORT_PATH)
 
 
 __all__ = [

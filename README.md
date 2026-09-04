@@ -503,3 +503,12 @@ The container-scoped equivalents used by a floating window's own title bar are
 dock. `canCloseDock()` and `canFloatDock()` let a delegate enable or hide its
 close and float buttons, and `floatingWindowForDock()` returns the window
 hosting a dock, or `null` when it is docked.
+
+## Embedded resources
+
+QML, JavaScript, and font files are loaded directly from the package by default.
+Executable builds can compile any of the `resources.qrc` manifests to a sibling
+`resources_rc.py` module with `pyside6-rcc`. The owning application imports that
+module when it is present and switches to `qrc:/` URLs automatically; otherwise
+it retains the package-file fallback. Generated `resources_rc.py` modules are
+ignored by Git and are not required when installing or running the Python package.

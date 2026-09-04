@@ -8,21 +8,32 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QFile, QIODevice
+
 
 _LAYOUT_VERSION_PATTERN = re.compile(
     r"^\s*var\s+layoutVersion\s*=\s*(\d+)\s*;?\s*$",
     re.MULTILINE,
 )
-_LAYOUT_VERSION_SOURCE = Path(__file__).parent / "qml" / "QuickDock" / "DockLayout.js"
+_LAYOUT_VERSION_SOURCE = ":/quickdock/qml/QuickDock/DockLayout.js"
+_LAYOUT_VERSION_SOURCE_FALLBACK = Path(__file__).parent / "qml" / "QuickDock" / "DockLayout.js"
 
 
 def _read_layout_version() -> int:
-    source = _LAYOUT_VERSION_SOURCE.read_text(encoding="utf-8")
+    if QFile.exists(_LAYOUT_VERSION_SOURCE):
+        resource = QFile(_LAYOUT_VERSION_SOURCE)
+        if not resource.open(QIODevice.OpenModeFlag.ReadOnly):
+            raise RuntimeError(f"Could not open embedded docking resource: {_LAYOUT_VERSION_SOURCE}")
+        source = bytes(resource.readAll()).decode("utf-8")
+        source_name = _LAYOUT_VERSION_SOURCE
+    else:
+        source = _LAYOUT_VERSION_SOURCE_FALLBACK.read_text(encoding="utf-8")
+        source_name = _LAYOUT_VERSION_SOURCE_FALLBACK
     match = _LAYOUT_VERSION_PATTERN.search(source)
     if match is None:
         raise RuntimeError(
             "DockLayout.js does not export a valid layout version: "
-            f"{_LAYOUT_VERSION_SOURCE}"
+            f"{source_name}"
         )
     return int(match.group(1))
 
