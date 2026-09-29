@@ -65,5 +65,5 @@ jobs:
         run: |
           pyside6-qmllint -W 0 -I src/quickdock/qml \
             src/quickdock/qml/QuickDock/*.qml \
-            src/quickdock/qml/QuickDock/Style/*.qml \
+            src/quickdock/qml/QuickDock/style/*.qml \
             src/quickdock/demo/Main.qml

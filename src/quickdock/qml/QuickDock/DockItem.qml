@@ -38,7 +38,6 @@ Item {
 
     property var allowedZones: ["center", "left", "right", "top", "bottom"]
     property int closePolicy: DockItem.Destroy
-    property bool _workspaceOwned: false // Set by DockWorkspace.createDock() or registerDock(..., true).
     default property alias content: contentHost.data
 
     signal destructionCompleted(string destroyedDockId)

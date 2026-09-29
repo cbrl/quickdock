@@ -1,7 +1,16 @@
 .pragma library
 .import "DockTypes.js" as DockTypes
 
+// Pure layout algebra: tree queries and edits with structural sharing, size
+// limits, geometry, and drop-zone math. Nothing here touches QML objects.
+// Dock size limits come from a `limitsOf(dockId)` callback that returns
+// `{minimum: {width, height}, maximum: {width, height}}` or null, and header
+// and splitter sizes come from `metrics = {header, splitter}`.
+
 var layoutVersion = 2
+
+// Qt's largest supported item dimension, used as "no maximum".
+var unlimited = 16777215
 
 function _sameArray(first, second) {
     if (first === second)
@@ -20,6 +29,10 @@ function _positive(value) {
     return isFinite(number) && number > 0 ? number : 1
 }
 
+function _clamp(value, lower, upper) {
+    return Math.max(lower, Math.min(upper, value))
+}
+
 function normalizedWeights(weights, count) {
     const source = Array.isArray(weights) ? weights : []
     const result = []
@@ -29,33 +42,28 @@ function normalizedWeights(weights, count) {
         result.push(value)
         total += value
     }
-    if (total <= 0)
-        return result
     for (let i = 0; i < result.length; ++i)
         result[i] /= total
     return result
 }
 
-// Collecting into a caller-provided array keeps recursive traversals cheap and
-// lets callers choose whether they need a new list or an accumulated result.
+// --- Queries ----------------------------------------------------------------
+
 function collectDocks(node, result) {
     result = result || []
     if (!node)
         return result
     if (node.kind === "tabs") {
-        const docks = Array.isArray(node.docks) ? node.docks : []
-        for (let i = 0; i < docks.length; ++i)
-            result.push(docks[i])
+        for (let i = 0; i < node.docks.length; ++i)
+            result.push(node.docks[i])
     } else if (node.kind === "split") {
-        const children = Array.isArray(node.children) ? node.children : []
-        for (let i = 0; i < children.length; ++i)
-            collectDocks(children[i], result)
+        for (let i = 0; i < node.children.length; ++i)
+            collectDocks(node.children[i], result)
     }
     return result
 }
 
-// Depth-first search for the first node matching predicate. Tab groups are
-// leaves. Split nodes are the only ones with children to recurse into.
+// Depth-first search for the first node matching predicate.
 function find(node, predicate) {
     if (!node)
         return null
@@ -76,11 +84,7 @@ function findGroup(node, groupId) {
 }
 
 function findGroupForDock(node, dockId) {
-    return find(
-        node,
-        candidate => candidate.kind === "tabs"
-                && candidate.docks.indexOf(dockId) >= 0
-    )
+    return find(node, candidate => candidate.kind === "tabs" && candidate.docks.indexOf(dockId) >= 0)
 }
 
 function findNode(node, nodeId) {
@@ -90,6 +94,47 @@ function findNode(node, nodeId) {
 function firstGroup(node) {
     return find(node, candidate => candidate.kind === "tabs")
 }
+
+function firstActiveDock(node) {
+    const group = firstGroup(node)
+    return group ? group.active : ""
+}
+
+// Docks in the same group and in the adjacent siblings of each ancestor split.
+function neighborsOf(node, dockId) {
+    const result = []
+    function appendDocks(value) {
+        const docks = collectDocks(value)
+        for (let i = 0; i < docks.length; ++i) {
+            if (docks[i] !== dockId && result.indexOf(docks[i]) < 0)
+                result.push(docks[i])
+        }
+    }
+    function visit(value) {
+        if (!value)
+            return false
+        if (value.kind === "tabs") {
+            if (value.docks.indexOf(dockId) < 0)
+                return false
+            appendDocks(value)
+            return true
+        }
+        for (let i = 0; i < value.children.length; ++i) {
+            if (!visit(value.children[i]))
+                continue
+            if (i > 0)
+                appendDocks(value.children[i - 1])
+            if (i + 1 < value.children.length)
+                appendDocks(value.children[i + 1])
+            return true
+        }
+        return false
+    }
+    visit(node)
+    return result
+}
+
+// --- Normalization and edits --------------------------------------------------
 
 function _normalizedTabs(node) {
     const source = Array.isArray(node.docks) ? node.docks : []
@@ -104,9 +149,12 @@ function _normalizedTabs(node) {
     const active = docks.indexOf(node.active) >= 0 ? node.active : docks[0]
     if (_sameArray(docks, node.docks) && active === node.active)
         return node
-    return DockTypes.tabsNode({id: node.id, docks: docks, active: active})
+    return DockTypes.tabs(node.id, docks, active)
 }
 
+// Drops empty nodes, collapses single-child splits, and flattens nested splits
+// that share an orientation while preserving each pane's relative weight.
+// Returns the same node when nothing changes.
 function normalize(node) {
     if (!node || typeof node !== "object")
         return null
@@ -120,18 +168,14 @@ function normalize(node) {
     const sourceWeights = normalizedWeights(node.weights, sourceChildren.length)
     const children = []
     const weights = []
-    let changed = orientation !== node.orientation || !Array.isArray(node.children)
+    let changed = orientation !== node.orientation
 
     for (let i = 0; i < sourceChildren.length; ++i) {
         const child = normalize(sourceChildren[i])
-        if (!child) {
-            changed = true
-            continue
-        }
         if (child !== sourceChildren[i])
             changed = true
-        // Flatten nested splits with the same orientation. This keeps the
-        // model shallow and preserves each descendant's relative weight.
+        if (!child)
+            continue
         if (child.kind === "split" && child.orientation === orientation) {
             const nestedWeights = normalizedWeights(child.weights, child.children.length)
             for (let j = 0; j < child.children.length; ++j) {
@@ -151,30 +195,20 @@ function normalize(node) {
         return children[0]
 
     const finalWeights = normalizedWeights(weights, children.length)
-    if (!changed && _sameArray(children, node.children)) {
-        const currentWeights = normalizedWeights(node.weights, children.length)
-        let weightsChanged = !Array.isArray(node.weights)
-                || currentWeights.length !== node.weights.length
-        for (let i = 0; !weightsChanged && i < currentWeights.length; ++i)
-            weightsChanged = Math.abs(currentWeights[i] - Number(node.weights[i])) > 1e-9
-        if (!weightsChanged)
+    if (!changed && Array.isArray(node.weights) && node.weights.length === children.length) {
+        let same = true
+        for (let i = 0; same && i < finalWeights.length; ++i)
+            same = Math.abs(finalWeights[i] - Number(node.weights[i])) < 1e-9
+        if (same)
             return node
     }
-    return DockTypes.splitNode({
-        id: node.id,
-        orientation: orientation,
-        weights: finalWeights,
-        children: children
-    })
+    return DockTypes.split(node.id, orientation, finalWeights, children)
 }
 
-// Recurses the tree, applying transform at every node. transform returns
-// undefined to mean "not a match, keep walking". Any other value (including
-// null) replaces the node at that position. Split ancestors above a change
-// are rebuilt with structural sharing of untouched siblings, optionally
-// renormalized (needed whenever a transform can delete or restructure a
-// child, e.g. dock removal. Not needed for pure metadata edits like weights
-// or the active tab, which cannot make a split collapsible).
+// Applies transform at every node. transform returns undefined for "keep
+// walking"; any other value (including null) replaces the node. Ancestors of
+// a change are copied, untouched siblings are shared, and the ancestors are
+// renormalized when requested (needed after removals or insertions).
 function mapSpine(node, transform, normalizeAncestors) {
     if (!node)
         return node
@@ -196,488 +230,418 @@ function mapSpine(node, transform, normalizeAncestors) {
     if (!nextChildren)
         return node
 
-    const rebuilt = DockTypes.splitNode({
-        id: node.id,
-        orientation: node.orientation,
-        weights: node.weights,
-        children: nextChildren
-    })
+    const rebuilt = DockTypes.split(node.id, node.orientation, node.weights, nextChildren)
     return normalizeAncestors ? normalize(rebuilt) : rebuilt
 }
 
 function _replaceNode(node, nodeId, replacement) {
-    return mapSpine(
-        node,
-        candidate => candidate.id === nodeId ? replacement : undefined,
-        true
-    )
+    return mapSpine(node, candidate => candidate.id === nodeId ? replacement : undefined, true)
 }
 
 function withSplitRatio(node, splitId, splitterIndex, ratio) {
-    return mapSpine(
-        node,
-        function(candidate) {
-            if (candidate.kind !== "split" || candidate.id !== splitId)
-                return undefined
-            const index = Math.max(0, Math.floor(Number(splitterIndex)))
-            if (index >= candidate.children.length - 1)
-                return candidate
-            const bounded = Math.max(0, Math.min(1, Number(ratio)))
-            if (!isFinite(bounded))
-                return candidate
+    return mapSpine(node, function(candidate) {
+        if (candidate.kind !== "split" || candidate.id !== splitId)
+            return undefined
+        const index = Math.max(0, Math.floor(Number(splitterIndex)))
+        const bounded = _clamp(Number(ratio), 0, 1)
+        if (index >= candidate.children.length - 1 || !isFinite(bounded))
+            return candidate
 
-            const weights = normalizedWeights(candidate.weights, candidate.children.length)
-            const pairWeight = weights[index] + weights[index + 1]
-            const firstWeight = pairWeight * bounded
-            const secondWeight = pairWeight - firstWeight
-            if (Math.abs(weights[index] - firstWeight) < 1e-9
-                    && Math.abs(weights[index + 1] - secondWeight) < 1e-9)
-                return candidate
-            weights[index] = firstWeight
-            weights[index + 1] = secondWeight
-
-            return DockTypes.splitNode({
-                id: candidate.id,
-                orientation: candidate.orientation,
-                weights: weights,
-                children: candidate.children
-            })
-        },
-        false
-    )
+        const weights = normalizedWeights(candidate.weights, candidate.children.length)
+        const pairWeight = weights[index] + weights[index + 1]
+        const firstWeight = pairWeight * bounded
+        if (Math.abs(weights[index] - firstWeight) < 1e-9)
+            return candidate
+        weights[index] = firstWeight
+        weights[index + 1] = pairWeight - firstWeight
+        return DockTypes.split(candidate.id, candidate.orientation, weights, candidate.children)
+    }, false)
 }
 
 function withDockRemoved(node, dockId) {
-    return mapSpine(
-        node,
-        function(candidate) {
-            if (candidate.kind !== "tabs")
-                return undefined
-            const index = candidate.docks.indexOf(dockId)
-            if (index < 0)
-                return undefined
+    return mapSpine(node, function(candidate) {
+        if (candidate.kind !== "tabs")
+            return undefined
+        const index = candidate.docks.indexOf(dockId)
+        if (index < 0)
+            return undefined
 
-            const docks = candidate.docks.slice()
-            docks.splice(index, 1)
-            if (!docks.length)
-                return null
-
-            const active = candidate.active === dockId
-                    ? docks[Math.min(index, docks.length - 1)] : candidate.active
-            return DockTypes.tabsNode({id: candidate.id, docks: docks, active: active})
-        },
-        true
-    )
-}
-
-function _splitWeights(ratio, before) {
-    const value = Number(ratio)
-    const bounded = isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.5
-    return before ? [bounded, 1 - bounded] : [1 - bounded, bounded]
-}
-
-function _newTabGroup(groupId, dockId) {
-    return DockTypes.tabsNode({id: groupId, docks: [dockId], active: dockId})
-}
-
-function _splitPlacement(zone) {
-    return DockTypes.splitPlacement({
-        horizontal: zone === "left" || zone === "right",
-        before: zone === "left" || zone === "top"
-    })
-}
-
-function withDockInserted(node, targetGroupId, dockId, zone, groupId, splitId, tabIndex, splitRatio) {
-    const placement = zone || "center"
-    const newGroup = _newTabGroup(groupId, dockId)
-    if (!node)
-        return newGroup
-
-    const target = findGroup(node, targetGroupId)
-    if (!target)
-        return node
-
-    if (placement === "center") {
-        let index = Math.floor(Number(tabIndex))
-        if (!isFinite(index) || index < 0 || index > target.docks.length)
-            index = target.docks.length
-
-        const docks = target.docks.slice()
-        const existing = docks.indexOf(dockId)
-        if (existing >= 0)
-            docks.splice(existing, 1)
-
-        docks.splice(Math.min(index, docks.length), 0, dockId)
-
-        return _replaceNode(
-            node,
-            targetGroupId,
-            DockTypes.tabsNode({id: target.id, docks: docks, active: dockId})
-        )
-    }
-
-    const placementInfo = _splitPlacement(placement)
-    const replacement = DockTypes.splitNode({
-        id: splitId,
-        orientation: placementInfo.horizontal ? "horizontal" : "vertical",
-        weights: _splitWeights(splitRatio, placementInfo.before),
-        children: placementInfo.before ? [newGroup, target] : [target, newGroup]
-    })
-    return _replaceNode(node, targetGroupId, replacement)
-}
-
-function withDockInsertedAtRoot(node, dockId, zone, groupId, splitId, splitRatio) {
-    const newGroup = _newTabGroup(groupId, dockId)
-    if (!node)
-        return newGroup
-
-    const placementInfo = _splitPlacement(zone)
-    return normalize(DockTypes.splitNode({
-        id: splitId,
-        orientation: placementInfo.horizontal ? "horizontal" : "vertical",
-        weights: _splitWeights(splitRatio, placementInfo.before),
-        children: placementInfo.before ? [newGroup, node] : [node, newGroup]
-    }))
-}
-
-// Container-title drags move a complete layout subtree. Directional drops
-// preserve that subtree, while center drops merge a tabs root into the target
-// group without changing the order of either tab list.
-function withNodeInserted(node, targetGroupId, insertedNode, zone, splitId, tabIndex, splitRatio) {
-    if (!node)
-        return insertedNode
-
-    const target = findGroup(node, targetGroupId)
-    if (!target || !insertedNode)
-        return node
-
-    const placement = zone || "center"
-    if (placement === "center") {
-        if (insertedNode.kind !== "tabs")
-            return node
-
-        let index = Math.floor(Number(tabIndex))
-        if (!isFinite(index) || index < 0 || index > target.docks.length)
-            index = target.docks.length
-
-        const docks = target.docks.slice()
-        docks.splice.apply(docks, [index, 0].concat(insertedNode.docks))
-        return _replaceNode(
-            node,
-            targetGroupId,
-            DockTypes.tabsNode({id: target.id, docks: docks, active: insertedNode.active})
-        )
-    }
-
-    const placementInfo = _splitPlacement(placement)
-    const replacement = DockTypes.splitNode({
-        id: splitId,
-        orientation: placementInfo.horizontal ? "horizontal" : "vertical",
-        weights: _splitWeights(splitRatio, placementInfo.before),
-        children: placementInfo.before ? [insertedNode, target] : [target, insertedNode]
-    })
-    return _replaceNode(node, targetGroupId, replacement)
-}
-
-function withNodeInsertedAtRoot(node, insertedNode, zone, splitId, splitRatio) {
-    if (!node)
-        return insertedNode
-    if (!insertedNode)
-        return node
-
-    const placementInfo = _splitPlacement(zone)
-    return normalize(DockTypes.splitNode({
-        id: splitId,
-        orientation: placementInfo.horizontal ? "horizontal" : "vertical",
-        weights: _splitWeights(splitRatio, placementInfo.before),
-        children: placementInfo.before ? [insertedNode, node] : [node, insertedNode]
-    }))
+        const docks = candidate.docks.slice()
+        docks.splice(index, 1)
+        if (!docks.length)
+            return null
+        const active = candidate.active === dockId
+            ? docks[Math.min(index, docks.length - 1)] : candidate.active
+        return DockTypes.tabs(candidate.id, docks, active)
+    }, true)
 }
 
 function withActiveDock(node, dockId) {
-    return mapSpine(
-        node,
-        function(candidate) {
-            if (candidate.kind !== "tabs")
-                return undefined
-            if (candidate.docks.indexOf(dockId) < 0 || candidate.active === dockId)
-                return candidate
-            return DockTypes.tabsNode({
-                id: candidate.id,
-                docks: candidate.docks,
-                active: dockId
-            })
-        },
-        false
+    return mapSpine(node, function(candidate) {
+        if (candidate.kind !== "tabs")
+            return undefined
+        if (candidate.docks.indexOf(dockId) < 0 || candidate.active === dockId)
+            return candidate
+        return DockTypes.tabs(candidate.id, candidate.docks, dockId)
+    }, false)
+}
+
+// "left"/"top" put the new node first; "left"/"right" split horizontally.
+function splitPlacement(zone) {
+    return {
+        horizontal: zone === "left" || zone === "right",
+        before: zone === "left" || zone === "top"
+    }
+}
+
+function _splitAround(existing, inserted, zone, splitId, ratio) {
+    const placement = splitPlacement(zone)
+    const value = Number(ratio)
+    const share = isFinite(value) ? _clamp(value, 0, 1) : 0.5
+    return DockTypes.split(
+        splitId,
+        placement.horizontal ? "horizontal" : "vertical",
+        placement.before ? [share, 1 - share] : [1 - share, share],
+        placement.before ? [inserted, existing] : [existing, inserted]
     )
 }
 
-function withTabMoved(node, groupId, fromIndex, toIndex) {
-    const group = findGroup(node, groupId)
-    if (!group)
+// Inserts a subtree relative to a tab group. A "center" drop merges a tabs
+// node into the group at `tabIndex` (the final index of the first inserted
+// tab; negative appends). Any other zone splits the group, giving the new
+// node `ratio` of the space. Returns the root unchanged when the group is
+// missing or a non-tabs node is dropped in the center.
+function withNodeInserted(root, groupId, node, zone, splitId, tabIndex, ratio) {
+    if (!root)
         return node
-    const from = Math.floor(Number(fromIndex))
-    let to = Math.floor(Number(toIndex))
-    if (from < 0 || from >= group.docks.length || !isFinite(to))
-        return node
-    to = Math.max(0, Math.min(group.docks.length - 1, to))
-    if (from === to)
-        return node
-    const docks = group.docks.slice()
-    const dockId = docks.splice(from, 1)[0]
-    docks.splice(to, 0, dockId)
-    return _replaceNode(
-        node,
-        groupId,
-        DockTypes.tabsNode({id: group.id, docks: docks, active: group.active})
-    )
+    const target = findGroup(root, groupId)
+    if (!target || !node)
+        return root
+
+    if (!zone || zone === "center") {
+        if (node.kind !== "tabs")
+            return root
+        let index = Math.floor(Number(tabIndex))
+        if (!isFinite(index) || index < 0 || index > target.docks.length)
+            index = target.docks.length
+        const docks = target.docks.slice()
+        docks.splice.apply(docks, [index, 0].concat(node.docks))
+        return _replaceNode(root, groupId, DockTypes.tabs(target.id, docks, node.active))
+    }
+    return normalize(_replaceNode(root, groupId, _splitAround(target, node, zone, splitId, ratio)))
 }
 
-function _dockMinimum(dockId, resolver) {
-    let value = null
-    if (typeof resolver === "function")
-        value = resolver(dockId)
-    else if (resolver && typeof resolver === "object")
-        value = resolver[dockId]
-    return DockTypes.size({
-        width: Math.max(0, Number(value && value.width) || 0),
-        height: Math.max(0, Number(value && value.height) || 0)
+// Inserts a subtree along one outer edge of a container's root.
+function withNodeAtRoot(root, node, zone, splitId, ratio) {
+    if (!root)
+        return node
+    if (!node)
+        return root
+    return normalize(_splitAround(root, node, zone, splitId, ratio))
+}
+
+// --- Size limits and geometry ---------------------------------------------------
+
+function _size(width, height) {
+    return {width: width, height: height}
+}
+
+function _metric(metrics, key) {
+    return Math.max(0, Number(metrics && metrics[key]) || 0)
+}
+
+function _dockLimits(dockId, limitsOf) {
+    const limits = typeof limitsOf === "function" ? limitsOf(dockId) : null
+    const minimum = limits && limits.minimum
+    const maximum = limits && limits.maximum
+    const bound = value => {
+        const number = Number(value)
+        return isFinite(number) && number > 0 ? Math.min(unlimited, number) : unlimited
+    }
+    return {
+        minimum: _size(Math.max(0, Number(minimum && minimum.width) || 0),
+                       Math.max(0, Number(minimum && minimum.height) || 0)),
+        maximum: _size(bound(maximum && maximum.width), bound(maximum && maximum.height))
+    }
+}
+
+// The smallest and largest size a subtree can be rendered at. Tabbed docks
+// overlap and pay for one header; split children add up along the split axis
+// and pay for the splitters between them.
+function sizeLimitsOf(node, limitsOf, metrics) {
+    if (!node || (node.kind !== "tabs" && node.kind !== "split"))
+        return {minimum: _size(0, 0), maximum: _size(unlimited, unlimited)}
+
+    if (node.kind === "tabs") {
+        const header = _metric(metrics, "header")
+        const minimum = _size(0, 0)
+        const maximum = _size(unlimited, unlimited)
+        for (let i = 0; i < node.docks.length; ++i) {
+            const limits = _dockLimits(node.docks[i], limitsOf)
+            minimum.width = Math.max(minimum.width, limits.minimum.width)
+            minimum.height = Math.max(minimum.height, limits.minimum.height)
+            maximum.width = Math.min(maximum.width, limits.maximum.width)
+            maximum.height = Math.min(maximum.height, limits.maximum.height)
+        }
+        minimum.height += header
+        maximum.height = Math.min(unlimited, maximum.height + header)
+        return {minimum: minimum, maximum: maximum}
+    }
+
+    const horizontal = node.orientation === "horizontal"
+    const splitters = (node.children.length - 1) * _metric(metrics, "splitter")
+    const minimum = _size(0, 0)
+    const maximum = horizontal ? _size(splitters, unlimited) : _size(unlimited, splitters)
+    if (horizontal)
+        minimum.width = splitters
+    else
+        minimum.height = splitters
+    for (let i = 0; i < node.children.length; ++i) {
+        const limits = sizeLimitsOf(node.children[i], limitsOf, metrics)
+        if (horizontal) {
+            minimum.width += limits.minimum.width
+            minimum.height = Math.max(minimum.height, limits.minimum.height)
+            maximum.width = Math.min(unlimited, maximum.width + limits.maximum.width)
+            maximum.height = Math.min(maximum.height, limits.maximum.height)
+        } else {
+            minimum.width = Math.max(minimum.width, limits.minimum.width)
+            minimum.height += limits.minimum.height
+            maximum.width = Math.min(maximum.width, limits.maximum.width)
+            maximum.height = Math.min(unlimited, maximum.height + limits.maximum.height)
+        }
+    }
+    return {minimum: minimum, maximum: maximum}
+}
+
+function _axisMinimums(node, limitsOf, metrics) {
+    const horizontal = node.orientation === "horizontal"
+    return node.children.map(child => {
+        const minimum = sizeLimitsOf(child, limitsOf, metrics).minimum
+        return Math.max(0, horizontal ? minimum.width : minimum.height)
     })
 }
 
-function minimumSizeOf(node, resolver, headerHeight, splitterSize) {
-    if (!node)
-        return DockTypes.size({width: 0, height: 0})
-    if (node.kind === "tabs") {
-        let width = 0
-        let height = 0
-        for (let i = 0; i < node.docks.length; ++i) {
-            const size = _dockMinimum(node.docks[i], resolver)
-            width = Math.max(width, size.width)
-            height = Math.max(height, size.height)
-        }
-        return DockTypes.size({
-            width: width,
-            height: height + Math.max(0, Number(headerHeight) || 0)
-        })
-    }
-    if (node.kind !== "split")
-        return DockTypes.size({width: 0, height: 0})
-    const horizontal = node.orientation === "horizontal"
-    let width = 0
-    let height = 0
-    for (let i = 0; i < node.children.length; ++i) {
-        const size = minimumSizeOf(
-            node.children[i],
-            resolver,
-            headerHeight,
-            splitterSize
-        )
-        if (horizontal) {
-            width += size.width
-            height = Math.max(height, size.height)
-        } else {
-            width = Math.max(width, size.width)
-            height += size.height
-        }
-    }
-    const splitters = Math.max(0, node.children.length - 1)
-            * Math.max(0, Number(splitterSize) || 0)
-    if (horizontal)
-        width += splitters
-    else
-        height += splitters
-    return DockTypes.size({width: width, height: height})
-}
-
-function maximumSizeOf(node, resolver, headerHeight, splitterSize) {
-    const unlimited = 16777215
-    if (!node)
-        return DockTypes.size({width: unlimited, height: unlimited})
-    if (node.kind === "tabs") {
-        let width = unlimited
-        let height = unlimited
-        for (let i = 0; i < node.docks.length; ++i) {
-            const size = resolver(node.docks[i])
-            if (!size)
-                continue
-            const itemWidth = Number(size.width)
-            const itemHeight = Number(size.height)
-            width = Math.min(
-                width,
-                isFinite(itemWidth) && itemWidth > 0 ? itemWidth : unlimited
-            )
-            height = Math.min(
-                height,
-                isFinite(itemHeight) && itemHeight > 0 ? itemHeight : unlimited
-            )
-        }
-        return DockTypes.size({
-            width: width,
-            height: Math.min(unlimited, height + Math.max(0, Number(headerHeight) || 0))
-        })
-    }
-    if (node.kind !== "split")
-        return DockTypes.size({width: unlimited, height: unlimited})
-    const horizontal = node.orientation === "horizontal"
-    let width = horizontal ? 0 : unlimited
-    let height = horizontal ? unlimited : 0
-    for (let i = 0; i < node.children.length; ++i) {
-        const size = maximumSizeOf(
-            node.children[i],
-            resolver,
-            headerHeight,
-            splitterSize
-        )
-        if (horizontal) {
-            width = Math.min(unlimited, width + size.width)
-            height = Math.min(height, size.height)
-        } else {
-            width = Math.min(width, size.width)
-            height = Math.min(unlimited, height + size.height)
-        }
-    }
-    const splitters = Math.max(0, node.children.length - 1)
-            * Math.max(0, Number(splitterSize) || 0)
-    if (horizontal)
-        width = Math.min(unlimited, width + splitters)
-    else
-        height = Math.min(unlimited, height + splitters)
-    return DockTypes.size({width: width, height: height})
-}
-
-function constrainedLengths(node, availableLength, resolver, headerHeight, splitterSize) {
+// Pixel lengths of a split's children along its axis, excluding splitters.
+// Panes that would fall below their minimum are pinned to it and the rest
+// share the remaining space by weight. When even the minimums do not fit,
+// they are scaled down proportionally so the split still fills its space.
+function constrainedLengths(node, availableLength, limitsOf, metrics, minimums) {
     if (!node || node.kind !== "split")
         return []
     const count = node.children.length
     const available = Math.max(0, Number(availableLength) || 0)
-    const horizontal = node.orientation === "horizontal"
     const weights = normalizedWeights(node.weights, count)
-    const minimums = []
-    let minimumTotal = 0
-    for (let i = 0; i < count; ++i) {
-        const size = minimumSizeOf(
-            node.children[i],
-            resolver,
-            headerHeight,
-            splitterSize
-        )
-        const minimum = Math.max(0, horizontal ? size.width : size.height)
-        minimums.push(minimum)
-        minimumTotal += minimum
-    }
+    minimums = minimums || _axisMinimums(node, limitsOf, metrics)
+    const minimumTotal = minimums.reduce((total, value) => total + value, 0)
 
-    // If minimums cannot fit, scale them proportionally so the layout still
-    // fills its viewport. Otherwise, pin panes that would fall below their
-    // minimum and distribute the remaining space by the saved weights.
     const result = new Array(count).fill(0)
     if (minimumTotal >= available && minimumTotal > 0) {
         const scale = available / minimumTotal
         let used = 0
         for (let i = 0; i < count; ++i) {
             result[i] = i === count - 1
-                    ? Math.max(0, available - used)
-                    : Math.max(0, Math.round(minimums[i] * scale))
+                ? Math.max(0, available - used)
+                : Math.max(0, Math.round(minimums[i] * scale))
             used += result[i]
         }
         return result
     }
 
     let remaining = available
-    let remainingWeight = 0
-    const active = []
-    for (let i = 0; i < count; ++i) {
-        active.push(i)
-        remainingWeight += weights[i]
-    }
+    let remainingWeight = 1
+    const free = []
+    for (let i = 0; i < count; ++i)
+        free.push(i)
     let changed = true
-    while (changed && active.length) {
+    while (changed && free.length) {
         changed = false
-        for (let i = active.length - 1; i >= 0; --i) {
-            const index = active[i]
-            const proposed = remainingWeight > 0
-                    ? remaining * weights[index] / remainingWeight : 0
+        for (let i = free.length - 1; i >= 0; --i) {
+            const index = free[i]
+            const proposed = remainingWeight > 0 ? remaining * weights[index] / remainingWeight : 0
             if (proposed + 0.01 < minimums[index]) {
                 result[index] = minimums[index]
                 remaining -= minimums[index]
                 remainingWeight -= weights[index]
-                active.splice(i, 1)
+                free.splice(i, 1)
                 changed = true
             }
         }
     }
     let used = 0
-    for (let i = 0; i < active.length; ++i) {
-        const index = active[i]
-        const last = i === active.length - 1
-        result[index] = last
-                ? Math.max(0, remaining - used)
-                : Math.max(
-                      0,
-                      Math.round(remaining * weights[index] / remainingWeight)
-                  )
+    for (let i = 0; i < free.length; ++i) {
+        const index = free[i]
+        result[index] = i === free.length - 1
+            ? Math.max(0, remaining - used)
+            : Math.max(0, Math.round(remaining * weights[index] / remainingWeight))
         used += result[index]
     }
     return result
 }
 
-function neighborsOf(node, dockId) {
-    const result = []
-    function appendDocks(value) {
-        const docks = collectDocks(value)
-        for (let i = 0; i < docks.length; ++i) {
-            if (docks[i] !== dockId && result.indexOf(docks[i]) < 0)
-                result.push(docks[i])
+// Lays out a container's tree inside a width x height box. Returns tab group
+// rects keyed by group id, and splitter rects keyed by "splitId:index" with
+// what a splitter drag needs (the split's current lengths and minimums).
+// `override = {splitId, lengths}` substitutes live lengths during a drag.
+function computeGeometry(root, width, height, limitsOf, metrics, override) {
+    const result = {groups: {}, splitters: {}}
+    const splitterSize = _metric(metrics, "splitter")
+
+    function visit(node, x, y, w, h) {
+        if (!node)
+            return
+        if (node.kind === "tabs") {
+            result.groups[node.id] = {x: x, y: y, width: w, height: h, node: node}
+            return
+        }
+        const horizontal = node.orientation === "horizontal"
+        const count = node.children.length
+        const available = Math.max(0, (horizontal ? w : h) - splitterSize * (count - 1))
+        const minimums = _axisMinimums(node, limitsOf, metrics)
+        const lengths = override && override.splitId === node.id && override.lengths.length === count
+            ? override.lengths
+            : constrainedLengths(node, available, limitsOf, metrics, minimums)
+
+        let offset = 0
+        for (let i = 0; i < count; ++i) {
+            if (horizontal)
+                visit(node.children[i], x + offset, y, lengths[i], h)
+            else
+                visit(node.children[i], x, y + offset, w, lengths[i])
+            offset += lengths[i]
+            if (i + 1 < count) {
+                result.splitters[node.id + ":" + i] = {
+                    x: horizontal ? x + offset : x,
+                    y: horizontal ? y : y + offset,
+                    width: horizontal ? splitterSize : w,
+                    height: horizontal ? h : splitterSize,
+                    splitId: node.id,
+                    index: i,
+                    horizontal: horizontal,
+                    lengths: lengths,
+                    minimums: minimums
+                }
+            }
+            offset += splitterSize
         }
     }
-    function visit(value) {
-        if (!value)
-            return false
-        if (value.kind === "tabs") {
-            if (value.docks.indexOf(dockId) < 0)
-                return false
-            appendDocks(value)
-            return true
-        }
-        if (value.kind !== "split")
-            return false
-        for (let i = 0; i < value.children.length; ++i) {
-            if (!visit(value.children[i]))
-                continue
-            if (i > 0)
-                appendDocks(value.children[i - 1])
-            if (i + 1 < value.children.length)
-                appendDocks(value.children[i + 1])
-            return true
-        }
-        return false
-    }
-    visit(node)
+
+    visit(root, 0, 0, Math.max(0, width), Math.max(0, height))
     return result
 }
 
-// --- Snapshot / container algebra -----------------------------------------
-// State construction is centralized in DockTypes so every returned record has
-// an explicit class while preserving the immutable, JSON-compatible API.
-
-function snapshotWith(containers, hidden) {
-    return DockTypes.layoutSnapshot({
-        version: layoutVersion,
-        containers: containers,
-        hidden: hidden || []
-    })
+// Lengths for a live splitter drag: the pair around `index` keeps its total,
+// the splitter moves by `delta`, and neither pane goes below its minimum.
+function draggedLengths(lengths, minimums, index, delta) {
+    const pair = lengths[index] + lengths[index + 1]
+    const lower = Math.min(pair, minimums[index])
+    const upper = Math.max(lower, pair - minimums[index + 1])
+    const first = _clamp(lengths[index] + delta, lower, upper)
+    const result = lengths.slice()
+    result[index] = first
+    result[index + 1] = pair - first
+    return result
 }
 
-function containerWithRoot(container, nextRoot) {
+// Size limits of a floating window around a container: the content limits,
+// the window floor, and the title bar a multi-dock container gets.
+function floatingLimits(content, titleBarHeight, floor) {
+    content = content || sizeLimitsOf(null)
+    const titleBar = Math.max(0, Number(titleBarHeight) || 0)
+    const minimum = _size(
+        Math.max(Number(floor && floor.width) || 0, content.minimum.width),
+        Math.max(Number(floor && floor.height) || 0, content.minimum.height + titleBar)
+    )
+    return {
+        minimum: minimum,
+        maximum: _size(
+            Math.max(minimum.width, content.maximum.width),
+            Math.max(minimum.height, Math.min(unlimited, content.maximum.height + titleBar))
+        )
+    }
+}
+
+// Rounds a rect and fits it to size limits and, when given, a screen area so
+// the window stays reachable.
+function fitGeometry(rect, limits, area) {
+    let width = _clamp(Math.round(Number(rect.width)), limits.minimum.width, limits.maximum.width)
+    let height = _clamp(Math.round(Number(rect.height)), limits.minimum.height, limits.maximum.height)
+    let x = Math.round(Number(rect.x))
+    let y = Math.round(Number(rect.y))
+    if (area && area.width > 0 && area.height > 0) {
+        width = Math.min(width, area.width)
+        height = Math.min(height, area.height)
+        x = _clamp(x, area.x, area.x + area.width - width)
+        y = _clamp(y, area.y, area.y + area.height - height)
+    }
+    return DockTypes.rect(x, y, width, height)
+}
+
+// --- Drop zones -----------------------------------------------------------------
+
+// The edge whose band contains the point, nearest first; "center" otherwise.
+// Distances are normalized by each axis's band.
+function nearestEdgeZone(x, y, width, height, bandX, bandY) {
+    const candidates = []
+    if (x < bandX)
+        candidates.push({zone: "left", distance: bandX > 0 ? x / bandX : 1})
+    if (x > width - bandX)
+        candidates.push({zone: "right", distance: bandX > 0 ? (width - x) / bandX : 1})
+    if (y < bandY)
+        candidates.push({zone: "top", distance: bandY > 0 ? y / bandY : 1})
+    if (y > height - bandY)
+        candidates.push({zone: "bottom", distance: bandY > 0 ? (height - y) / bandY : 1})
+    if (!candidates.length)
+        return "center"
+    candidates.sort((first, second) => first.distance - second.distance)
+    return candidates[0].zone
+}
+
+// Zone within a tab group: bands are a fraction of each side, capped in pixels.
+function edgeZone(x, y, width, height, fraction, maxBand) {
+    return nearestEdgeZone(x, y, width, height,
+                           Math.min(width * fraction, maxBand),
+                           Math.min(height * fraction, maxBand))
+}
+
+// Zone along a container's outer edge: a fixed, narrow pixel band.
+function outerEdgeZone(x, y, width, height, band) {
+    const size = Math.max(1, band)
+    return nearestEdgeZone(x, y, width, height, size, size)
+}
+
+// The part of `rect` a drop in `zone` would occupy.
+function previewRect(rect, zone, ratio) {
+    const result = DockTypes.rect(rect.x, rect.y, rect.width, rect.height)
+    if (zone === "left") {
+        result.width *= ratio
+    } else if (zone === "right") {
+        result.x += result.width * (1 - ratio)
+        result.width *= ratio
+    } else if (zone === "top") {
+        result.height *= ratio
+    } else if (zone === "bottom") {
+        result.y += result.height * (1 - ratio)
+        result.height *= ratio
+    }
+    return result
+}
+
+// --- Snapshots and containers -----------------------------------------------------
+
+function snapshotWith(containers, hidden) {
+    return DockTypes.snapshot(layoutVersion, containers, hidden)
+}
+
+function containerWithRoot(container, root) {
     if (container.kind === "main")
-        return DockTypes.mainContainer({id: container.id, root: nextRoot, selected: container.selected})
-    return DockTypes.floatingContainer({
-        id: container.id,
-        geometry: container.geometry,
-        screen: container.screen || "",
-        root: nextRoot,
-        selected: container.selected
-    })
+        return DockTypes.mainContainer(root, container.selected)
+    return DockTypes.floatingContainer(container.id, container.geometry, container.screen, root, container.selected)
+}
+
+function containerWithSelection(container, selected) {
+    const copy = containerWithRoot(container, container.root)
+    copy.selected = selected
+    return copy
 }
 
 function containerById(containers, id) {
@@ -701,30 +665,19 @@ function mainContainer(containers) {
         if (containers[i].kind === "main")
             return containers[i]
     }
-    return DockTypes.mainContainer({id: "main", root: null, selected: ""})
+    return DockTypes.mainContainer(null, "")
 }
 
-function firstActiveDock(node) {
-    if (!node)
-        return ""
-    if (node.kind === "tabs")
-        return node.active || (node.docks.length ? node.docks[0] : "")
-    for (let i = 0; i < node.children.length; ++i) {
-        const dockId = firstActiveDock(node.children[i])
-        if (dockId)
-            return dockId
-    }
-    return ""
-}
-
+// Removes a dock from every container. Floating containers left empty go away.
 function withoutDock(containers, dockId) {
     const next = []
     for (let i = 0; i < containers.length; ++i) {
         const container = containers[i]
-        const rootAfter = withDockRemoved(container.root, dockId)
-        if (container.kind === "floating" && !rootAfter)
-            continue
-        next.push(containerWithRoot(container, rootAfter))
+        const root = withDockRemoved(container.root, dockId)
+        if (root === container.root)
+            next.push(container)
+        else if (root || container.kind === "main")
+            next.push(containerWithRoot(container, root))
     }
     return next
 }
@@ -732,12 +685,9 @@ function withoutDock(containers, dockId) {
 function deepFreeze(value) {
     if (!value || typeof value !== "object" || Object.isFrozen(value))
         return value
-
     Object.freeze(value)
-
     const keys = Object.keys(value)
     for (let i = 0; i < keys.length; ++i)
         deepFreeze(value[keys[i]])
-
     return value
 }

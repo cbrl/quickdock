@@ -102,6 +102,47 @@ ApplicationWindow {
             }
 
             ToolButton {
+                label: qsTr("Undo")
+                opacity: workspace.canUndoLayout ? 1 : 0.4
+                onClicked: workspace.undoLayout()
+            }
+
+            ToolButton {
+                label: qsTr("Redo")
+                opacity: workspace.canRedoLayout ? 1 : 0.4
+                onClicked: workspace.redoLayout()
+            }
+
+            // Lists every dock. Picking a hidden one shows it again.
+            ToolButton {
+                id: viewButton
+                label: qsTr("View")
+                onClicked: viewMenu.popup(viewButton, 0, viewButton.height)
+
+                Menu {
+                    id: viewMenu
+
+                    Repeater {
+                        model: workspace.dockIds()
+
+                        MenuItem {
+                            required property string modelData
+                            readonly property DockItem dock: workspace.dockById(modelData)
+                            text: dock ? dock.title : modelData
+                            checkable: true
+                            checked: workspace.dockState(modelData) !== "hidden"
+                            onTriggered: {
+                                if (checked)
+                                    workspace.showDock(modelData)
+                                else
+                                    workspace.closeDock(modelData)
+                            }
+                        }
+                    }
+                }
+            }
+
+            ToolButton {
                 label: qsTr("Theme")
                 onClicked: {
                     workspace.style.preset = workspace.style.preset === DockStyle.Dark
@@ -127,13 +168,15 @@ ApplicationWindow {
     DockWorkspace {
         id: workspace
         anchors.fill: parent
-        onDockClosed: dockId => statusText.text = qsTr("%1 destroyed").arg(dockId)
+        onDockClosed: dockId => statusText.text = qsTr("%1 closed").arg(dockId)
+        onErrorOccurred: (code, message) => statusText.text = message
     }
 
     Component {
         id: editorDockComponent
         DockItem {
             dockId: "editor"
+            closePolicy: DockItem.Hide
             title: qsTr("Scene")
             preferredSize: Qt.size(620, 420)
 
@@ -178,6 +221,7 @@ ApplicationWindow {
         id: outlineDockComponent
         DockItem {
             dockId: "outline"
+            closePolicy: DockItem.Hide
             title: qsTr("Outline")
             preferredSize: Qt.size(330, 440)
 
@@ -222,6 +266,7 @@ ApplicationWindow {
         id: inspectorDockComponent
         DockItem {
             dockId: "inspector"
+            closePolicy: DockItem.Hide
             title: qsTr("Inspector")
             preferredSize: Qt.size(360, 500)
 
@@ -277,6 +322,7 @@ ApplicationWindow {
         id: consoleDockComponent
         DockItem {
             dockId: "console"
+            closePolicy: DockItem.Hide
             title: qsTr("Telemetry")
             preferredSize: Qt.size(650, 280)
 
@@ -339,18 +385,20 @@ ApplicationWindow {
     // Arrange the sample docks into a repeatable layout for the Reset action.
     function createDemoLayout() {
         workspace.resetLayout()
-        workspace.splitDock("inspector", "editor", "right")
-        workspace.splitDock("console", "editor", "bottom")
-        workspace.dockAsTab("outline", "inspector")
+        workspace.moveDock("inspector", "editor", "right")
+        workspace.moveDock("console", "editor", "bottom")
+        workspace.moveDock("outline", "inspector", "center")
         workspace.activateDock("inspector")
         statusText.text = qsTr("Demo layout reset")
     }
 
     // Restore persisted state when possible, otherwise seed the demo layout.
+    // Either way, the startup layout is not something to undo.
     Component.onCompleted: {
         createDemoDocks()
         if (!settings.layoutState || !workspace.restoreLayout(settings.layoutState))
             createDemoLayout()
+        workspace.clearLayoutHistory()
     }
 
     onClosing: settings.layoutState = workspace.saveLayout()

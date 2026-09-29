@@ -3,92 +3,68 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Window
 
-// Borderless window with input passthrough used while a dock is dragged from the
-// main canvas. It shows a captured image when available and a styled fallback.
+// Frameless, input-transparent window that follows the pointer while a docked
+// dock is dragged. It shows the dragPreviewDelegate, which gets a captured
+// image of the drag source once one is available.
 Window {
     id: root
 
     required property DockWorkspace workspace
     property string dockId: ""
-    // Named `dockTitle` rather than `title` so it does not shadow the
-    // inherited Window.title, which would retitle the native preview window.
-    property string dockTitle: ""
-    property url iconSource: ""
     property url snapshotSource: ""
     property var _grabResult: null
-    property int _captureGeneration: 0
-    objectName: "dockDragPreview"
+    property int _generation: 0
 
-    flags: Qt.ToolTip
-           | Qt.FramelessWindowHint
-           | Qt.WindowTransparentForInput
-           | Qt.WindowStaysOnTopHint
-           | Qt.NoDropShadowWindowHint
+    objectName: "dockDragPreview"
+    flags: Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowTransparentForInput
+           | Qt.WindowStaysOnTopHint | Qt.NoDropShadowWindowHint
     transientParent: workspace.Window.window
     color: "transparent"
-    opacity: workspace.style.drag.preview.opacity
+    opacity: workspace.style.dragPreview.opacity
     visible: false
 
-    // The style-provided delegate receives the same dock metadata as a tab.
-    Loader {
-        anchors.fill: parent
-        sourceComponent: root.workspace.dragPreviewDelegate
-        property DockWorkspace workspace: root.workspace
-        property DockStyle style: root.workspace.style
-        property string dockId: root.dockId
-        property string title: root.dockTitle
-        property url iconSource: root.iconSource
-        property url snapshotSource: root.snapshotSource
-    }
-
-    // Capture the source after showing the window so the preview remains
-    // responsive even when image grabbing is unsupported by the source item.
-    function showPreview(nextDockId, sourceItem, geometry) {
-        const item = workspace.dockById(nextDockId)
+    function showPreview(nextDockId, source, rect) {
         dockId = nextDockId
-        dockTitle = item ? item.title : nextDockId
-        iconSource = item ? item.icon : ""
         snapshotSource = ""
         _grabResult = null
-        _captureGeneration += 1
-        const generation = _captureGeneration
-
-        setGeometry(
-            Math.round(geometry.x),
-            Math.round(geometry.y),
-            Math.max(1, Math.round(geometry.width)),
-            Math.max(1, Math.round(geometry.height))
-        )
-
+        const generation = ++_generation
+        setGeometry(Math.round(rect.x), Math.round(rect.y),
+                    Math.max(1, Math.round(rect.width)), Math.max(1, Math.round(rect.height)))
         visible = true
-        if (!sourceItem || typeof sourceItem.grabToImage !== "function")
+        if (!source)
             return
-
-        sourceItem.grabToImage(
-            result => {
-                if (root.visible && generation === root._captureGeneration) {
-                    root._grabResult = result
-                    root.snapshotSource = result.url
-                }
-            },
-            Qt.size(width, height)
-        )
+        source.grabToImage(result => {
+            if (root.visible && generation === root._generation) {
+                root._grabResult = result
+                root.snapshotSource = result.url
+            }
+        }, Qt.size(width, height))
     }
 
-    function movePreview(nextX, nextY) {
-        if (!visible)
-            return
-        x = Math.round(nextX)
-        y = Math.round(nextY)
+    function movePreview(x, y) {
+        if (visible) {
+            root.x = Math.round(x)
+            root.y = Math.round(y)
+        }
     }
 
     function hidePreview() {
-        _captureGeneration += 1
+        ++_generation
         visible = false
         snapshotSource = ""
         _grabResult = null
         dockId = ""
-        dockTitle = ""
-        iconSource = ""
+    }
+
+    DockDelegateHost {
+        anchors.fill: parent
+        delegate: root.workspace.dragPreviewDelegate
+        context: QtObject {
+            readonly property DockWorkspace workspace: root.workspace
+            readonly property DockStyle style: root.workspace.style
+            readonly property DockItem dock: root.workspace.dockById(root.dockId)
+            readonly property string dockId: root.dockId
+            readonly property url snapshotSource: root.snapshotSource
+        }
     }
 }

@@ -1,9 +1,7 @@
-pragma ComponentBehavior: Bound
-
 import QtQuick
 
+// Text glyphs of the built-in buttons.
 QtObject {
-    objectName: "dockStyleGlyphs"
     property string close: "×"
     property string float: "↗"
     property string dock: "↙"
