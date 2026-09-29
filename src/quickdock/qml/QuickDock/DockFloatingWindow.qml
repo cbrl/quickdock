@@ -9,6 +9,10 @@ import "DockLayout.js" as DockLayout
 // and resizes back once a gesture ends. A window with more than one dock gets
 // a title bar, as does one with a single dock when behavior.singleDockTitleBar
 // is set. Otherwise the dock's header moves the window.
+//
+// The workspace's windowIntegrationDelegate, when set, is created once in the
+// window to integrate it with the platform: a native frame and shadow, snap
+// layouts, and the like.
 Window {
     id: root
 
@@ -23,6 +27,23 @@ Window {
     readonly property DockItem selectedDock: workspace.dockById(selectedDockId)
     // Frameless windows on some platforms report maximize as FullScreen.
     readonly property bool maximized: visibility === Window.Maximized || visibility === Window.FullScreen
+
+    // The maximize button of the window's chrome while it is shown, or null.
+    // A title bar or header delegate offers one as its `maximizeButton`.
+    // An integration may let the platform hit-test it (Windows 11 opens its
+    // snap layouts over it), and the button then gets no pointer events of its
+    // own. The integration reports the button's hover and press state here
+    // instead, and the chrome shows it.
+    readonly property Item maximizeButton: {
+        const button = hasTitleBar ? titleBar.value("maximizeButton", null) : _headerMaximizeButton
+        return button && button.visible ? button : null
+    }
+    property bool maximizeButtonHovered: false
+    property bool maximizeButtonPressed: false
+
+    // Without a title bar, the header of the window's only dock is its
+    // chrome. That dock's DockGroup sets the header's maximize button here.
+    property Item _headerMaximizeButton: null
 
     // Window size limits: the container delegate's own minimumSize and
     // maximumSize when it declares them, the dock tree's otherwise.
@@ -110,7 +131,12 @@ Window {
             workspace.dockContainerToMain(containerId)
     }
 
+    // An integration with a toggleMaximized() of its own does it instead, and
+    // returns true when it did.
     function toggleMaximized() {
+        const integrationToggle = integrationHost.value("toggleMaximized", null)
+        if (typeof integrationToggle === "function" && integrationToggle())
+            return
         if (maximized)
             showNormal()
         else
@@ -164,7 +190,7 @@ Window {
         if (_gesture)
             return false
         if (maximized)
-            showNormal()
+            toggleMaximized()
         _gesture = "move"
         _gestureStart = globalPoint
         _startGeometry = Qt.rect(x, y, width, height)
@@ -253,6 +279,19 @@ Window {
         id: settleTimer
         interval: 250
         onTriggered: root.endResize()
+    }
+
+    // Declared first so it stays below the title bar and content.
+    DockDelegateHost {
+        id: integrationHost
+        anchors.fill: parent
+        delegate: root._alive ? root.workspace.windowIntegrationDelegate : null
+        context: QtObject {
+            readonly property DockWorkspace workspace: root.workspace
+            readonly property DockStyle style: root.workspace.style
+            readonly property var floatingWindow: root
+            readonly property string containerId: root.containerId
+        }
     }
 
     DockDelegateHost {

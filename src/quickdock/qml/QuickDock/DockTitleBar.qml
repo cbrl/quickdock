@@ -3,8 +3,9 @@ pragma ComponentBehavior: Bound
 import QtQuick
 
 // The default titleBarDelegate, shown by floating windows with more than one
-// dock. It names the selected dock, docks the whole container back, maximizes
-// the window, and moves the window (with all of its docks) when dragged.
+// dock, and by single-dock windows under behavior.singleDockTitleBar. It names
+// the selected dock, docks the whole container back, maximizes the window, and
+// moves the window (with all of its docks) when dragged.
 Rectangle {
     id: root
 
@@ -14,6 +15,9 @@ Rectangle {
     required property string containerId
     required property DockItem dock
     required property bool maximized
+
+    // Offered to the window, which may have the platform hit-test it.
+    readonly property Item maximizeButton: maximizeTitleButton
 
     readonly property Item _iconItem: iconImage.visible ? iconImage : (iconGlyph.visible ? iconGlyph : null)
 
@@ -97,8 +101,11 @@ Rectangle {
         }
 
         TitleButton {
+            id: maximizeTitleButton
             objectName: "floatingMaximizeButton_" + root.containerId
             glyph: root.maximized ? root.style.glyphs.restore : root.style.glyphs.maximize
+            platformHovered: root.floatingWindow.maximizeButtonHovered
+            platformPressed: root.floatingWindow.maximizeButtonPressed
             onClicked: root.floatingWindow.toggleMaximized()
         }
     }
@@ -110,15 +117,21 @@ Rectangle {
         color: root.style.colors.accent
     }
 
+    // `platformHovered` and `platformPressed` are the state the platform
+    // reports when it hit-tests the button itself.
     component TitleButton: Rectangle {
         id: button
         property string glyph
+        property bool platformHovered: false
+        property bool platformPressed: false
         signal clicked()
 
         width: root.style.header.buttonSize
         height: root.style.header.buttonSize
         radius: root.style.header.buttonRadius
-        color: buttonHover.hovered ? root.style.colors.hover : "transparent"
+        color: buttonTap.pressed || platformPressed ? Qt.darker(root.style.colors.hover, 1.15)
+             : buttonHover.hovered || platformHovered ? root.style.colors.hover
+             : "transparent"
 
         Text {
             anchors.centerIn: parent
@@ -132,6 +145,7 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
         }
         TapHandler {
+            id: buttonTap
             acceptedButtons: Qt.LeftButton
             onTapped: button.clicked()
         }

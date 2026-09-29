@@ -20,6 +20,10 @@ Rectangle {
     required property var floatingWindow
     required property bool moveWindow
 
+    // Shown when the header moves its window, which may then have the
+    // platform hit-test it.
+    readonly property Item maximizeButton: maximizeHeaderButton
+
     readonly property bool showButtons: (!dock || dock.headerButtonsVisible) && (!compact || selected)
     readonly property Item _iconItem: iconImage.visible ? iconImage : (iconGlyph.visible ? iconGlyph : null)
 
@@ -125,10 +129,13 @@ Rectangle {
         }
 
         HeaderButton {
+            id: maximizeHeaderButton
             objectName: "dockMaximizeButton_" + root.dockId
             glyph: root.floatingWindow && root.floatingWindow.maximized
                    ? root.style.glyphs.restore : root.style.glyphs.maximize
             visible: root.moveWindow
+            platformHovered: root.moveWindow && root.floatingWindow.maximizeButtonHovered
+            platformPressed: root.moveWindow && root.floatingWindow.maximizeButtonPressed
             onClicked: root.floatingWindow.toggleMaximized()
         }
 
@@ -153,16 +160,22 @@ Rectangle {
         color: root.selected ? root.style.colors.accent : root.style.colors.border
     }
 
+    // `platformHovered` and `platformPressed` are the state the platform
+    // reports when it hit-tests the button itself.
     component HeaderButton: Rectangle {
         id: button
         property string glyph
         property font glyphFont: root.style.fonts.button
+        property bool platformHovered: false
+        property bool platformPressed: false
         signal clicked()
 
         width: root.style.header.buttonSize
         height: root.style.header.buttonSize
         radius: root.style.header.buttonRadius
-        color: buttonHover.hovered ? root.style.colors.hover : "transparent"
+        color: buttonTap.pressed || platformPressed ? Qt.darker(root.style.colors.hover, 1.15)
+             : buttonHover.hovered || platformHovered ? root.style.colors.hover
+             : "transparent"
 
         Text {
             anchors.centerIn: parent
@@ -176,6 +189,7 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
         }
         TapHandler {
+            id: buttonTap
             acceptedButtons: Qt.LeftButton
             onTapped: button.clicked()
         }

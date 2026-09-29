@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import (  # noqa: E402
     QCoreApplication,
+    QEvent,
     QObject,
     QPoint,
     QPointF,
@@ -245,6 +246,44 @@ Window {
 }
 """
 
+# A windowIntegrationDelegate standing in for a native helper: it counts the
+# maximize requests it gets, and handles them when told to.
+WINDOW_INTEGRATION_QML = b"""
+import QtQuick
+import QtQuick.Window
+import QuickDock 1.0
+
+Window {
+    width: 900
+    height: 600
+    visible: true
+
+    DockWorkspace {
+        objectName: "integrationWorkspace"
+        anchors.fill: parent
+
+        windowIntegrationDelegate: Component {
+            Item {
+                id: integration
+                required property var floatingWindow
+                required property string containerId
+                property bool handlesMaximize: false
+                property int maximizeRequests: 0
+                objectName: "windowIntegration_" + containerId
+
+                function toggleMaximized() {
+                    ++integration.maximizeRequests
+                    return integration.handlesMaximize
+                }
+            }
+        }
+
+        DockItem { dockId: "scene"; title: "Scene"; Rectangle { anchors.fill: parent } }
+        DockItem { dockId: "outline"; title: "Outline"; Rectangle { anchors.fill: parent } }
+    }
+}
+"""
+
 
 # --------------------------------------------------------------------------
 # Fixtures and helpers
@@ -423,6 +462,10 @@ def without_ids(value):
 
 def qml_value(value):
     return value.toVariant() if hasattr(value, "toVariant") else value
+
+
+def same_object(first: QObject | None, second: QObject | None) -> bool:
+    return first is not None and second is not None and getCppPointer(first) == getCppPointer(second)
 
 
 def center_of(item: QQuickItem) -> QPoint:
@@ -1482,6 +1525,124 @@ def test_floating_move_is_committed_once_and_can_dock_back(workspace, pump):
     state = saved(workspace)
     assert not floating_containers(state)
     assert "inspector" in collect_docks(main_container(state)["root"])
+
+
+def test_each_floating_window_gets_a_window_integration_that_can_take_over_maximizing(load, pump):
+    with qml_messages() as messages:
+        host = load(WINDOW_INTEGRATION_QML, "WindowIntegrationTest.qml")
+        workspace = host.findChild(QObject, "integrationWorkspace")
+        assert workspace.floatDock("scene", 120, 140, 510, 330)
+        assert workspace.floatDock("outline", 180, 190, 420, 260)
+        pump()
+    assert not warnings_in(messages)
+
+    # Only floating windows get one: one each, filling the window.
+    assert not find_items(host, "windowIntegration_")
+    integrations = {}
+    for dock_id in ("scene", "outline"):
+        window = workspace.floatingWindowForDock(dock_id)
+        found = find_items(window, "windowIntegration_")
+        assert [item.objectName() for item in found] == [f"windowIntegration_{window.property('containerId')}"]
+        assert same_object(found[0].property("floatingWindow"), window)
+        assert (found[0].width(), found[0].height()) == (window.width(), window.height())
+        integrations[dock_id] = found[0]
+
+    window = workspace.floatingWindowForDock("scene")
+    integration = integrations["scene"]
+    integration.setProperty("handlesMaximize", True)
+    window.toggleMaximized()
+    pump()
+    # The integration maximized the window (here, it did nothing) ...
+    assert integration.property("maximizeRequests") == 1
+    assert not window.property("maximized")
+
+    # ... until it declines, and the window does it itself.
+    integration.setProperty("handlesMaximize", False)
+    window.toggleMaximized()
+    pump()
+    assert integration.property("maximizeRequests") == 2
+    assert window.property("maximized")
+
+    # Dragging a maximized window restores it the same way.
+    assert workspace.beginDrag({"containerId": window.property("containerId"), "pressPoint": QPointF(200, 150)})
+    workspace.cancelDrag()
+    pump()
+    assert integration.property("maximizeRequests") == 3
+    assert not window.property("maximized")
+    assert integrations["outline"].property("maximizeRequests") == 0
+
+    # An integration goes with its window. processEvents() alone does not
+    # run deferred deletes at this level.
+    destroyed: list[bool] = []
+    integration.destroyed.connect(lambda: destroyed.append(True))
+    assert workspace.dockToMain("scene")
+    pump()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert destroyed == [True]
+
+
+def test_a_floating_windows_maximize_button_follows_its_chrome_and_shows_platform_state(workspace, pump):
+    assert workspace.floatDock("inspector", 120, 140, 510, 330)
+    pump()
+    window = workspace.floatingWindowForDock("inspector")
+    floating_id = window.property("containerId")
+
+    # A lone dock's header moves its window, so it has the window's button.
+    header_button = find_item(window, "dockMaximizeButton_inspector", visible=True)
+    assert same_object(window.property("maximizeButton"), header_button)
+
+    # A platform that hit-tests the button reports its state to the window,
+    # and the button shows it as it shows its own.
+    hover = token(workspace, "colors.hover")
+    pressed = evaluate(workspace, "Qt.darker(style.colors.hover, 1.15)")
+    window.setProperty("maximizeButtonHovered", True)
+    assert header_button.property("color") == hover
+    window.setProperty("maximizeButtonPressed", True)
+    assert header_button.property("color") == pressed
+    window.setProperty("maximizeButtonHovered", False)
+    window.setProperty("maximizeButtonPressed", False)
+    assert header_button.property("color") != hover
+
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center_of(header_button))
+    assert header_button.property("color") == pressed
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center_of(header_button))
+    pump()
+    assert window.property("maximized")
+    window.showNormal()
+    pump()
+
+    # A title bar takes over for a second dock, or when asked to ...
+    assert workspace.moveDock("scene", "inspector", "center")
+    pump()
+    title_button = find_item(window, f"floatingMaximizeButton_{floating_id}", visible=True)
+    assert same_object(window.property("maximizeButton"), title_button)
+    window.setProperty("maximizeButtonHovered", True)
+    assert title_button.property("color") == hover
+    window.setProperty("maximizeButtonHovered", False)
+
+    assert workspace.dockToMain("scene")
+    pump()
+    assert same_object(
+        window.property("maximizeButton"), find_item(window, "dockMaximizeButton_inspector", visible=True)
+    )
+
+    evaluate(workspace, "behavior.singleDockTitleBar = true")
+    pump()
+    assert same_object(
+        window.property("maximizeButton"), find_item(window, f"floatingMaximizeButton_{floating_id}", visible=True)
+    )
+
+    # ... and hands the button back to the header when it goes.
+    evaluate(workspace, "behavior.singleDockTitleBar = false")
+    pump()
+    assert same_object(
+        window.property("maximizeButton"), find_item(window, "dockMaximizeButton_inspector", visible=True)
+    )
+
+    # A hidden button is not offered.
+    workspace.dockById("inspector").setProperty("headerButtonsVisible", False)
+    pump()
+    assert window.property("maximizeButton") is None
 
 
 def test_custom_delegates_receive_the_values_they_declare(load, pump):

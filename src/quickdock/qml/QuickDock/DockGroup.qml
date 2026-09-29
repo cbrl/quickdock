@@ -103,6 +103,7 @@ Rectangle {
         visible: !root.headerless
 
         DockDelegateHost {
+            id: headerHost
             anchors.fill: parent
             visible: !root.tabbed
             delegate: root.node && !root.tabbed && !root.headerless ? root.workspace.headerDelegate : null
@@ -163,6 +164,17 @@ Rectangle {
                 readonly property string activeDock: root.activeDock
             }
         }
+    }
+
+    // A header that moves its window is that window's chrome, so its maximize
+    // button is the window's. Nothing needs restoring when that ends, since
+    // the window then has a title bar.
+    Binding {
+        target: root.floatingWindow
+        property: "_headerMaximizeButton"
+        value: headerHost.value("maximizeButton", null)
+        when: root.moveWindow
+        restoreMode: Binding.RestoreNone
     }
 
     // Only the active dock is shown. The others wait in the parking lot.

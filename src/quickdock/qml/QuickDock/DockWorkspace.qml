@@ -22,6 +22,10 @@ Item {
     property Component headerDelegate: Component { DockHeader {} }
     property Component tabDelegate: Component { DockHeader {} }
     property Component titleBarDelegate: Component { DockTitleBar {} }
+    // Optional. Created once in every floating window, below its content, to
+    // integrate the frameless window with the platform: a native frame and
+    // shadow, snap layouts, and the like. See DockFloatingWindow.
+    property Component windowIntegrationDelegate: null
     property Component overflowMenuDelegate: Component { DockOverflowMenu {} }
     property Component containerDelegate: Component { DockContainerView {} }
     property Component dropCompassDelegate: Component { DockDropCompass {} }

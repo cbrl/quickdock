@@ -191,7 +191,9 @@ workspace.dragging
 ```
 
 A floating window returned by `floatingWindowForDock()` has `maximized`,
-`showMaximized()`, `showNormal()`, and `toggleMaximized()`.
+`showMaximized()`, `showNormal()`, and `toggleMaximized()`, along with the
+members a [platform integration](#integrating-floating-windows-with-the-platform)
+uses.
 
 ### Workspace signals
 
@@ -366,6 +368,7 @@ DockWorkspace {
 | `floatingMinimumSize`                     | Smallest floating window.                                                 |
 | `floatingDefaultSize`                     | Floating size when neither the caller nor the layout gives one.           |
 | `floatingOrigin`, `floatingCascadeOffset` | Where new floating windows appear: a fraction of the workspace, cascaded. |
+| `singleDockTitleBar`                      | Gives a single-dock floating window a title bar in place of its header.   |
 
 ## Delegates
 
@@ -381,6 +384,7 @@ offered to every delegate.
 | `headerDelegate`              | `DockHeader`        | `dock`, `dockId`, `selected`, `compact`, `floatingWindow`, `moveWindow`                      |
 | `tabDelegate`                 | `DockHeader`        | Same as `headerDelegate`, with `compact` set. A tab's width comes from its `implicitWidth`.  |
 | `titleBarDelegate`            | `DockTitleBar`      | `floatingWindow`, `containerId`, `dock` (the selected dock), `maximized`                     |
+| `windowIntegrationDelegate`   | none                | `floatingWindow`, `containerId`                                                              |
 | `containerDelegate`           | `DockContainerView` | `containerId`, `container`, `floatingWindow`, `renderReady`                                  |
 | `containerBackgroundDelegate` | none                | `containerId`                                                                                |
 | `containerDecorationDelegate` | frame border        | `containerId`                                                                                |
@@ -490,6 +494,54 @@ Code that drives its own gestures can use the same session directly:
 `beginDrag({dockId, containerId, pressPoint, source})`, then
 `moveDrag(globalPoint)` for every movement (it returns the drop target or
 `null`), then `endDrag(globalPoint)` or `cancelDrag()`. Points are global.
+
+### Integrating floating windows with the platform
+
+Floating windows are frameless, so the platform does not decorate them and
+knows nothing of their title bar or buttons, which features like Windows Snap
+rely on. `windowIntegrationDelegate` can be provided to close that gap, usually
+by wrapping a native helper the application provides in C++ or Python.
+
+An integration works with these members of `floatingWindow`:
+
+| Member                                           | Purpose                                                                                      |
+|--------------------------------------------------|----------------------------------------------------------------------------------------------|
+| `maximizeButton`                                 | The maximize button of the window's title bar or header while it is shown, or `null`.        |
+| `maximizeButtonHovered`, `maximizeButtonPressed` | The button's state, set by an integration that has the platform hit-test it.                 |
+| `toggleMaximized()`                              | Asks the integration's own `toggleMaximized()` first, which returns `true` if it handled it. |
+
+On Windows 11, for example, a helper that answers `WM_NCHITTEST` with
+`HTMAXBUTTON` over `maximizeButton` gets the snap layouts flyout there. The
+button's hover, press, and click then arrive as non-client messages, which the
+helper passes on:
+
+```qml
+DockWorkspace {
+    windowIntegrationDelegate: Component {
+        // SnapFrame stands for the application's own native helper. It can
+        // also have an invokable toggleMaximized() that uses the platform's
+        // own maximize and returns true.
+        SnapFrame {
+            required property var floatingWindow
+
+            window: floatingWindow
+            maximizeButton: floatingWindow.maximizeButton
+            onMaximizeButtonHoveredChanged: floatingWindow.maximizeButtonHovered = maximizeButtonHovered
+            onMaximizeButtonPressedChanged: floatingWindow.maximizeButtonPressed = maximizeButtonPressed
+            onMaximizeButtonClicked: floatingWindow.toggleMaximized()
+        }
+    }
+}
+```
+
+A helper does not need to handle events for windows resizing or moving via the
+title bar or header. These events are still handled appropriately.
+
+A custom `titleBarDelegate` or `headerDelegate` offers its maximize button to
+the window as a `maximizeButton` property, as `DockTitleBar` and `DockHeader`
+do, and shows `floatingWindow.maximizeButtonHovered` and
+`maximizeButtonPressed` on it. A header's button counts only while the header
+moves its window (`moveWindow`).
 
 ## Embedded resources
 
