@@ -26,4 +26,9 @@ QtObject {
     property size floatingDefaultSize: Qt.size(480, 320)
     property point floatingOrigin: Qt.point(0.2, 0.15)
     property point floatingCascadeOffset: Qt.point(28, 28)
+
+    // Whether a floating window with a single dock has a title bar too, in
+    // place of its dock's header. Otherwise only a window with several docks
+    // has one, and a lone dock's header moves its window.
+    property bool singleDockTitleBar: false
 }

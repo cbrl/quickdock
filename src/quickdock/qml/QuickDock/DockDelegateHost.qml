@@ -16,19 +16,27 @@ Item {
     readonly property Item item: _item
 
     property Item _item: null
+    property bool _completed: false
 
     implicitWidth: _item ? _item.implicitWidth : 0
     implicitHeight: _item ? _item.implicitHeight : 0
 
     onDelegateChanged: _rebuild()
     onContextChanged: _rebuild()
-    Component.onCompleted: _rebuild()
+    Component.onCompleted: {
+        _completed = true
+        _rebuild()
+    }
 
     // A Repeater over an object model is used because it sets a delegate's
     // required properties from the object's properties by name. Its model is
     // cleared before its delegate changes: swapping the delegate of a live
-    // object-model Repeater crashes Qt 6.11.
+    // object-model Repeater crashes Qt 6.11. Nothing is built before the host
+    // is complete, as its initial delegate and context would otherwise each
+    // build an instance that is thrown away.
     function _rebuild() {
+        if (!_completed)
+            return
         repeater.model = []
         repeater.delegate = delegate
         repeater.model = delegate && context ? [context] : []

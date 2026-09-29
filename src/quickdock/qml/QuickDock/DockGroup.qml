@@ -15,8 +15,13 @@ Rectangle {
     readonly property var docks: node ? node.docks : []
     readonly property string activeDock: node ? node.active : ""
     readonly property bool tabbed: docks.length > 1
-    // A floating window with a single dock has no title bar. Its header moves the window.
+    // A floating window without a title bar is moved by its only dock's header.
     readonly property bool moveWindow: !!floatingWindow && !floatingWindow.hasTitleBar
+    // A floating window's title bar names its only dock, so that dock has no header.
+    readonly property bool headerless: !tabbed
+		&& !!floatingWindow
+		&& floatingWindow.hasTitleBar
+		&& floatingWindow.dockIds.length === 1
     readonly property bool tabsOverflow: tabbed
         && (docks.length * workspace.style.tab.minimumWidth > width || tabRow.width > width)
 
@@ -94,12 +99,13 @@ Rectangle {
             top: parent.top
             margins: root.workspace.style.frame.borderWidth
         }
-        height: root.workspace.style.header.height
+        height: root.headerless ? 0 : root.workspace.style.header.height
+        visible: !root.headerless
 
         DockDelegateHost {
             anchors.fill: parent
             visible: !root.tabbed
-            delegate: root.node && !root.tabbed ? root.workspace.headerDelegate : null
+            delegate: root.node && !root.tabbed && !root.headerless ? root.workspace.headerDelegate : null
             context: QtObject {
                 readonly property DockWorkspace workspace: root.workspace
                 readonly property DockStyle style: root.workspace.style

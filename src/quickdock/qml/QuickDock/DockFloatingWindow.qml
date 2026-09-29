@@ -7,7 +7,8 @@ import "DockLayout.js" as DockLayout
 // Native frameless window for one floating container. The snapshot owns its
 // geometry: the window applies snapshot changes and publishes its own moves
 // and resizes back once a gesture ends. A window with more than one dock gets
-// a title bar. With a single dock, that dock's header moves the window.
+// a title bar, as does one with a single dock when behavior.singleDockTitleBar
+// is set. Otherwise the dock's header moves the window.
 Window {
     id: root
 
@@ -17,6 +18,7 @@ Window {
 
     readonly property var dockIds: DockLayout.collectDocks(container ? container.root : null)
     readonly property bool hasTitleBar: dockIds.length > 1
+		|| (dockIds.length === 1 && workspace.behavior.singleDockTitleBar)
     readonly property string selectedDockId: container ? container.selected : ""
     readonly property DockItem selectedDock: workspace.dockById(selectedDockId)
     // Frameless windows on some platforms report maximize as FullScreen.
@@ -30,8 +32,14 @@ Window {
         const inner = minimum && maximum
             ? {minimum: minimum, maximum: maximum}
             : workspace._sizeLimits(container ? container.root : null)
-        return DockLayout.floatingLimits(inner, hasTitleBar ? workspace.style.header.height : 0,
-                                         workspace.behavior.floatingMinimumSize)
+
+        // A lone dock's title bar takes the place of its header, which the
+        // dock tree's limits already count.
+        return DockLayout.floatingLimits(
+			inner,
+			dockIds.length > 1 ? workspace.style.header.height : 0,
+            workspace.behavior.floatingMinimumSize
+		)
     }
 
     // "move" and "resize" are pointer gestures driven here. "systemResize" is
@@ -74,7 +82,7 @@ Window {
             _applyGeometry()
     }
     onVisibilityChanged: {
-        if (_ready && visibility === Window.Windowed)
+        if (_ready && root.visibility === Window.Windowed)
             _applyGeometry()
     }
     onXChanged: _schedulePublish()
